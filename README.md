@@ -74,9 +74,29 @@ Dependencies are wired by hand in `AppContainer`, because one screen and three r
 
 Layered architecture with BLoC/Cubit state management: **presentation (widgets + BLoC/Cubit) → domain → data**.
 
+- **Domain** (pure Dart, no Flutter or plugin imports):
+  - `CameraCapabilities`: the zoom range and focus support read from the device at runtime, plus the rule that picks the zoom shortcut buttons.
+  - `CapturedPhoto` and `CameraFailure`.
+  - The `CameraRepository` interface.
+- **Data:** `PluginCameraRepository` implements `CameraRepository` with the `camera` and `permission_handler` plugins.
+- **Presentation:** `CameraCubit` and `CameraPreviewScreen`, with small widgets for the zoom controls, focus indicator, shutter and thumbnail.
+- **Composition root** (`main.dart`, `app/`): creates the concrete repository and hands the screen a preview builder. The presentation layer never imports the camera plugin, and widget tests use a stand-in preview.
+
+#### Camera behaviour
+
+- **Zoom shortcuts come from the hardware.** A 0.5x button appears only when the back camera's minimum zoom is below 1x, which is how Android exposes an ultra-wide lens. On Android the camera plugin reports every lens type as "unknown", so the zoom range is the reliable signal. After that come 1x and then 2x, 5x and 10x where the camera reaches them. The vertical slider and pinch cover every level in between. The test phone (Galaxy A04s, 1x–8x, no ultra-wide) shows 1x, 2x and 5x.
+- **Tap-to-focus** converts the tap to 0–1 preview coordinates, which the camera plugin maps to the sensor taking display orientation into account. Exposure is metered at the same point, and an animated square marks the spot. Fixed-focus cameras skip it.
+- **Lifecycle:** following the camera plugin's guidance, the camera is released when the app goes inactive and reopened on resume, keeping the zoom level. The pause and resume caused by the permission dialog itself are ignored, so the camera isn't torn down while the user answers it.
+- **Concurrency:** opening, releasing and capturing run one at a time in call order, so the camera can never be released mid-capture. A second shutter tap during a capture is ignored.
+- **Photos** are 1080p JPEGs (`ResolutionPreset.veryHigh`), sharp enough for documentation while keeping uploads small.
+
 ### Main BLoC/Cubit classes
 
-_To be written once the features are implemented._
+| Class | Responsibility |
+|---|---|
+| `CameraCubit` | Owns the camera screen: permission, opening and releasing the camera with the app lifecycle, zoom (buttons, slider, pinch), tap-to-focus and capture. Its sealed `CameraState` is Starting, PermissionRequired, Unavailable, Paused or Ready. |
+
+_Upload queue and sync classes: to be written once implemented._
 
 ## Local persistence
 
@@ -118,7 +138,19 @@ Failures of a user action appear as a banner. Where the user can fix the cause, 
 
 When the user returns from Settings having fixed the cause, the banner clears and tracking restarts automatically. Replacing an existing office location asks for confirmation first, because it moves the geofence.
 
-_Flutter: to be written once implemented._
+**Tether Capture**, camera:
+
+| Situation | What the user sees |
+|---|---|
+| Camera permission denied | Explanation and **Allow camera**, which asks again |
+| Denied for good | Explanation and **Open settings**; returning with permission granted opens the camera automatically |
+| No back camera | A message saying so |
+| Camera fails to start (e.g. held by another app) | Explanation and **Try again** |
+| A photo fails | A snackbar; the camera stays ready |
+
+The app requests only the camera permission it needs. The camera plugin's microphone and storage permissions are removed from the manifest, because no audio is recorded and photos stay in app storage.
+
+_Upload queue and sync: to be written once implemented._
 
 ## Mock API
 
@@ -194,3 +226,10 @@ _To be added._
 - Only the most recent check-in is stored; there is no history or server sync.
 - Mock (spoofed) locations aren't detected.
 - Any user can set the office location; in a real deployment this would be an administrator action.
+
+**Tether Capture**
+
+- The UI is locked to portrait, and photos are taken in portrait orientation.
+- There is no front-camera switch or flash control; the brief asks for back-camera zoom and focus only.
+- On Android the zoom shortcuts reflect what the main back camera exposes through its zoom range. Phones that show an ultra-wide lens only as a separate camera, not through zoom below 1x, get no 0.5x button.
+- Photos taken so far are listed only for the current session; persisting them in an upload queue comes with batch management.

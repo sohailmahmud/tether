@@ -1,11 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
-/// Root widget. Feature BLoCs and their dependencies are provided here as the
-/// camera and upload-queue features are added.
+import '../domain/repositories/camera_repository.dart';
+import '../presentation/camera/camera_preview_screen.dart';
+import '../presentation/camera/cubit/camera_cubit.dart';
+
+/// Root widget. Dependencies are created in `main.dart` and passed in, so
+/// tests can supply fakes.
 class TetherCaptureApp extends StatelessWidget {
-  const TetherCaptureApp({super.key});
+  const TetherCaptureApp({
+    super.key,
+    required this.cameraRepository,
+    required this.cameraPreviewBuilder,
+  });
 
   static const title = 'Tether Capture';
+
+  final CameraRepository cameraRepository;
+  final WidgetBuilder cameraPreviewBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -19,19 +31,10 @@ class TetherCaptureApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const _HomePlaceholder(),
-    );
-  }
-}
-
-class _HomePlaceholder extends StatelessWidget {
-  const _HomePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text(TetherCaptureApp.title)),
-      body: const Center(child: Text('Camera and upload queue')),
+      home: BlocProvider(
+        create: (_) => CameraCubit(cameraRepository),
+        child: CameraPreviewScreen(previewBuilder: cameraPreviewBuilder),
+      ),
     );
   }
 }
