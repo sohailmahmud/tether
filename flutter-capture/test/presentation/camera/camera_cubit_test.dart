@@ -339,6 +339,23 @@ void main() {
     );
 
     blocTest<CameraCubit, CameraState>(
+      'an unexpected capture error still frees the shutter',
+      setUp: () => camera.captureError = StateError('plugin bug'),
+      build: () => CameraCubit(camera, uploads),
+      seed: () => ready,
+      act: (cubit) => cubit.capture(),
+      expect: () => [
+        const CameraReady(capabilities: backCamera, zoom: 1, isCapturing: true),
+        const CameraReady(
+          capabilities: backCamera,
+          zoom: 1,
+          captureFailed: true,
+        ),
+      ],
+      errors: () => [isA<StateError>()],
+    );
+
+    blocTest<CameraCubit, CameraState>(
       'a photo that cannot be saved to the queue is reported as a failed capture',
       setUp: () => uploads.addFails = true,
       build: () => CameraCubit(camera, uploads),

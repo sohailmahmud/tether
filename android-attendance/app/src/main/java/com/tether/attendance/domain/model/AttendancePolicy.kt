@@ -10,7 +10,8 @@ object AttendancePolicy {
     const val RADIUS_METERS = 50
 
     /**
-     * Fixes less precise than this are not trusted for check-in.
+     * Fixes less precise than this are not trusted for check-in, or to set the
+     * office from.
      *
      * Not from the assessment, which asks for "high accuracy" without a number.
      * Chosen equal to the radius: a fix whose uncertainty is larger than the
@@ -29,15 +30,20 @@ object AttendancePolicy {
     fun evaluate(office: OfficeLocation, fix: LocationData): AttendanceCheck {
         val distance =
             GeoDistance.meters(office.latitude, office.longitude, fix.latitude, fix.longitude)
-        val accuracy = fix.accuracyMeters
         val eligibility =
             when {
                 // Clearly outside is reported as such even on a poor fix: moving closer is the fix.
                 distance > RADIUS_METERS -> Eligibility.OutOfRange
-                accuracy == null || accuracy > MAX_ACCURACY_METERS -> Eligibility.LowAccuracy
+                !isPreciseEnough(fix) -> Eligibility.LowAccuracy
                 else -> Eligibility.Eligible
             }
         return AttendanceCheck(distanceMeters = distance, eligibility = eligibility)
+    }
+
+    /** Whether [fix] is within [MAX_ACCURACY_METERS]. A fix of unknown accuracy is not. */
+    fun isPreciseEnough(fix: LocationData): Boolean {
+        val accuracy = fix.accuracyMeters
+        return accuracy != null && accuracy <= MAX_ACCURACY_METERS
     }
 }
 

@@ -28,6 +28,9 @@ class FakeCameraRepository implements CameraRepository {
   CameraFailure? openFailure;
   bool captureFails = false;
 
+  /// When set, capture() throws it: an unexpected error, not a camera failure.
+  Object? captureError;
+
   /// When set, capture() waits for it, simulating a slow shutter.
   Completer<void>? captureGate;
 
@@ -76,6 +79,7 @@ class FakeCameraRepository implements CameraRepository {
   Future<CapturedPhoto> capture() async {
     captureCount++;
     await captureGate?.future;
+    if (captureError case final error?) throw error;
     if (captureFails) {
       throw const CameraFailureException(CameraFailure.captureFailed);
     }

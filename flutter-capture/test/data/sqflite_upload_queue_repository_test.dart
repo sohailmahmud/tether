@@ -331,6 +331,30 @@ void main() {
       expect(back.lastError, contains('interrupted'));
     });
 
+    test('a late failure never undoes a completed upload', () async {
+      final id = await queueBatch();
+      // Run A claims the batch, then stalls past the lease.
+      await queue.claimNextDueBatch(now: now);
+      final later = now.add(const Duration(minutes: 6));
+      await queue.recoverInterruptedUploads(olderThan: later);
+      // Run B takes it over and uploads it.
+      await queue.claimNextDueBatch(now: later);
+      await queue.markCompleted(id);
+
+      // Run A finally gives up.
+      await queue.markFailed(
+        id,
+        error: 'Timed out.',
+        nextAttemptAt: later.add(const Duration(seconds: 30)),
+      );
+
+      final done = await batch(id);
+      expect(done.status, UploadStatus.completed);
+      expect(done.retryCount, 0);
+      expect(done.lastError, isNull);
+      expect(await queue.hasUnfinishedUploads(), isFalse);
+    });
+
     test('reports when the earliest failed batch may be retried', () async {
       final a = await queueBatch();
       final b = await queueBatch();
@@ -428,6 +452,42 @@ void main() {
       queue = await openQueue();
     },
   );
+
+  test('photo files nothing points to are removed, queued ones kept', () async {
+    // A completed batch whose files survived (killed before deleting them).
+    await queue.addToDraft(await takePhoto());
+    final uploaded = await queue.submitDraft();
+    await queue.claimNextDueBatch(now: now);
+    await queue.markCompleted(uploaded!.id);
+    final survivor = File(photos.absolutePath(p.join(uploaded.id, 'a.jpg')));
+    await survivor.create(recursive: true);
+    // A pending batch and the draft, each with a stray file (killed between
+    // moving a photo in and recording it), plus a folder of no known batch.
+    await queue.addToDraft(await takePhoto());
+    final pending = await queue.submitDraft();
+    final draftPhoto = await queue.addToDraft(await takePhoto());
+    final strays = [
+      File(photos.absolutePath(p.join(pending!.id, 'stray.jpg'))),
+      File(photos.absolutePath(p.join(draftPhoto.batchId, 'stray.jpg'))),
+      File(photos.absolutePath(p.join('unknown', 'x.jpg'))),
+    ];
+    for (final stray in strays) {
+      await stray.create(recursive: true);
+    }
+
+    expect(await queue.deleteOrphanedPhotos(), 4);
+
+    expect(survivor.parent.existsSync(), isFalse);
+    expect(strays.where((f) => f.existsSync()), isEmpty);
+    expect(Directory(photos.absolutePath('unknown')).existsSync(), isFalse);
+    expect(File(pending.items.single.filePath).existsSync(), isTrue);
+    expect(File(draftPhoto.filePath).existsSync(), isTrue);
+    expect(await queue.deleteOrphanedPhotos(), 0, reason: 'nothing left');
+  });
+
+  test('cleaning up with no photo folder yet does nothing', () async {
+    expect(await queue.deleteOrphanedPhotos(), 0);
+  });
 
   group('changes made by another isolate', () {
     // The background worker has its own repository on the same database.

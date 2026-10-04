@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tether_capture/domain/entities/upload_queue_snapshot.dart';
 import 'package:tether_capture/domain/entities/upload_status.dart';
+import 'package:tether_capture/domain/repositories/upload_queue_repository.dart';
 import 'package:tether_capture/domain/usecases/process_upload_queue.dart';
 import 'package:tether_capture/presentation/uploads/cubit/sync_cubit.dart';
 
@@ -161,6 +162,35 @@ void main() {
       });
     },
   );
+
+  test('a storage error is retried after a pause, not in a tight loop', () {
+    queue.queue = UploadQueueSnapshot(
+      batches: [
+        testBatch(
+          id: 'f',
+          status: UploadStatus.failed,
+          retryCount: 1,
+        ).copyWithNextAttempt(launch),
+      ],
+    );
+    queue.claimThrows = const UploadQueueException('Disk full');
+
+    withCubit((async, cubit) {
+      expect(cubit.state.lastRunFailed, isTrue);
+      expect(queue.claimFailures, 1);
+
+      async.elapse(const Duration(seconds: 29));
+      expect(queue.claimFailures, 1, reason: 'no immediate re-run');
+
+      async.elapse(const Duration(seconds: 2));
+      expect(queue.claimFailures, 2, reason: 'tried again after 30 s');
+
+      queue.claimThrows = null;
+      async.elapse(const Duration(seconds: 30));
+      expect(api.uploadedIds, ['f']);
+      expect(cubit.state.lastRunFailed, isFalse);
+    });
+  });
 
   test('closing stops every timer', () {
     queue.queue = UploadQueueSnapshot(batches: [testBatch(id: 'a')]);

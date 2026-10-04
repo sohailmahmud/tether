@@ -40,6 +40,9 @@ abstract interface class UploadQueueRepository {
 
   /// The upload of [batchId] failed: records [error], counts the attempt, and
   /// schedules the next automatic retry. Photos and records are kept.
+  ///
+  /// Applies only while the batch is still uploading, so a late failure never
+  /// overrides a batch another run has completed in the meantime.
   Future<void> markFailed(
     String batchId, {
     required String error,

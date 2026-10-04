@@ -130,13 +130,20 @@ class FakeUploadQueueRepository implements UploadQueueRepository {
     return updated;
   }
 
-  /// When set, claimNextDueBatch() throws it (a storage failure).
+  /// When set, claimNextDueBatch() throws it (a storage failure), at most
+  /// [maxClaimFailures] times, so a runaway retry loop ends instead of
+  /// hanging the test.
   Object? claimThrows;
+  int claimFailures = 0;
+  static const maxClaimFailures = 50;
 
   @override
   Future<UploadBatch?> claimNextDueBatch({required DateTime now}) async {
     final error = claimThrows;
-    if (error != null) throw error;
+    if (error != null && claimFailures < maxClaimFailures) {
+      claimFailures++;
+      throw error;
+    }
     final due = _queue
         .batches
         .reversed // oldest first
@@ -180,12 +187,14 @@ class FakeUploadQueueRepository implements UploadQueueRepository {
   }) async {
     _replace(
       batchId,
-      (b) => b.withStatus(
-        UploadStatus.failed,
-        retryCount: b.retryCount + 1,
-        lastError: error,
-        nextAttemptAt: nextAttemptAt,
-      ),
+      (b) => b.status != UploadStatus.uploading
+          ? b
+          : b.withStatus(
+              UploadStatus.failed,
+              retryCount: b.retryCount + 1,
+              lastError: error,
+              nextAttemptAt: nextAttemptAt,
+            ),
     );
   }
 

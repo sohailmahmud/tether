@@ -153,6 +153,7 @@ private fun AttendanceError.action(actions: AttendanceActions): ErrorAction? = w
     // Retrying is the main buttons' job; no separate action needed.
     AttendanceError.PermissionDenied,
     AttendanceError.LocationUnavailable,
+    AttendanceError.OfficeLowAccuracy,
     AttendanceError.OfficeSaveFailed,
     AttendanceError.NoLongerEligible,
     AttendanceError.AttendanceSaveFailed,

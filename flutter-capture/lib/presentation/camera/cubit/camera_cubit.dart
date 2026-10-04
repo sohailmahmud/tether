@@ -107,14 +107,20 @@ class CameraCubit extends Cubit<CameraState> {
     }
     emit(current.copyWith(isCapturing: true, captureFailed: false));
     return _serialized(() async {
-      var failed = false;
+      var failed = true;
       try {
         final photo = await _camera.capture();
         await _uploads.addToDraft(photo);
+        failed = false;
       } on CameraFailureException {
-        failed = true;
+        // Shown to the user through captureFailed.
       } on UploadQueueException {
-        failed = true;
+        // Shown to the user through captureFailed.
+      } on Object catch (error, stack) {
+        // Unexpected (a bug, not a camera or storage failure): reported to
+        // the observer, and still shown as a failed capture so the shutter
+        // isn't left disabled.
+        addError(error, stack);
       }
       _updateReady(
         (ready) => ready.copyWith(isCapturing: false, captureFailed: failed),

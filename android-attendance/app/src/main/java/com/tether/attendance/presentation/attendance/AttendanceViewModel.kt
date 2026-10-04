@@ -86,6 +86,7 @@ class AttendanceViewModel(
                         is SetOfficeLocationResult.Saved -> null
                         is SetOfficeLocationResult.LocationFailed ->
                             result.error.toAttendanceError()
+                        is SetOfficeLocationResult.LowAccuracy -> AttendanceError.OfficeLowAccuracy
                         SetOfficeLocationResult.StorageFailed -> AttendanceError.OfficeSaveFailed
                     }
                 actions.update { it.copy(isSettingOffice = false, error = error) }
