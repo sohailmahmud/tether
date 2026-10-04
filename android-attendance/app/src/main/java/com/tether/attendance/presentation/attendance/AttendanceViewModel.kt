@@ -6,55 +6,113 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.tether.attendance.TetherAttendanceApp
+import com.tether.attendance.domain.model.AttendanceStatus
 import com.tether.attendance.domain.model.LocationError
+import com.tether.attendance.domain.repository.AttendanceRepository
 import com.tether.attendance.domain.repository.LocationRepository
-import com.tether.attendance.domain.repository.OfficeLocationRepository
+import com.tether.attendance.domain.usecase.MarkAttendanceResult
+import com.tether.attendance.domain.usecase.MarkAttendanceUseCase
+import com.tether.attendance.domain.usecase.ObserveAttendanceStatusUseCase
 import com.tether.attendance.domain.usecase.SetOfficeLocationResult
 import com.tether.attendance.domain.usecase.SetOfficeLocationUseCase
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AttendanceViewModel(
-    officeLocationRepository: OfficeLocationRepository,
+    observeAttendanceStatus: ObserveAttendanceStatusUseCase,
+    attendanceRepository: AttendanceRepository,
     private val locationRepository: LocationRepository,
     private val setOfficeLocation: SetOfficeLocationUseCase,
+    private val markAttendance: MarkAttendanceUseCase,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(AttendanceUiState())
-    val uiState: StateFlow<AttendanceUiState> = _uiState.asStateFlow()
+    /** Progress and errors of user actions; everything else is derived from storage and location. */
+    private data class ActionState(
+        val isSettingOffice: Boolean = false,
+        val isMarkingAttendance: Boolean = false,
+        val error: AttendanceError? = null,
+    )
+
+    private val actions = MutableStateFlow(ActionState())
+
+    /** Incremented to restart location tracking, e.g. after permission is granted. */
+    private val trackingRestarts = MutableStateFlow(0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val uiState: StateFlow<AttendanceUiState> =
+        combine(
+            trackingRestarts.flatMapLatest { observeAttendanceStatus() },
+            attendanceRepository.lastAttendance,
+            actions,
+        ) { status, lastAttendance, action ->
+            AttendanceUiState(
+                isOfficeLoaded = true,
+                status = status,
+                lastAttendance = lastAttendance,
+                isSettingOffice = action.isSettingOffice,
+                isMarkingAttendance = action.isMarkingAttendance,
+                error = action.error,
+            )
+        }.stateIn(
+            scope = viewModelScope,
+            // Location updates run only while the screen is visible. The 5 s grace
+            // period keeps them alive through a rotation instead of restarting GPS.
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = AttendanceUiState(),
+        )
 
     private var setOfficeJob: Job? = null
-
-    init {
-        // Storage is the single source of truth: a successful save reaches the
-        // screen through this flow, not by copying the result into state.
-        viewModelScope.launch {
-            officeLocationRepository.officeLocation.collect { office ->
-                _uiState.update { it.copy(isOfficeLoaded = true, officeLocation = office) }
-            }
-        }
-    }
+    private var markAttendanceJob: Job? = null
 
     /** Call only once fine location permission is granted; the UI requests it first. */
     fun onSetOfficeLocation() {
         // A second tap while a fix is in progress must not start a parallel request.
         if (setOfficeJob?.isActive == true) return
-        _uiState.update { it.copy(isSettingOffice = true, error = null) }
+        actions.update { it.copy(isSettingOffice = true, error = null) }
         setOfficeJob =
             viewModelScope.launch {
+                // A successful save reaches the screen through the office flow,
+                // which also restarts tracking against the new office.
                 val error =
                     when (val result = setOfficeLocation()) {
                         is SetOfficeLocationResult.Saved -> null
                         is SetOfficeLocationResult.LocationFailed ->
                             result.error.toAttendanceError()
-                        SetOfficeLocationResult.StorageFailed -> AttendanceError.SaveFailed
+                        SetOfficeLocationResult.StorageFailed -> AttendanceError.OfficeSaveFailed
                     }
-                _uiState.update { it.copy(isSettingOffice = false, error = error) }
+                actions.update { it.copy(isSettingOffice = false, error = error) }
             }
+    }
+
+    fun onMarkAttendance() {
+        if (markAttendanceJob?.isActive == true) return
+        val measured = uiState.value.status as? AttendanceStatus.Measured ?: return
+        actions.update { it.copy(isMarkingAttendance = true, error = null) }
+        markAttendanceJob =
+            viewModelScope.launch {
+                // The use case re-checks the rules; the button state alone is not trusted.
+                val error =
+                    when (markAttendance(measured.office, measured.fix)) {
+                        is MarkAttendanceResult.Marked -> null
+                        is MarkAttendanceResult.Rejected -> AttendanceError.NoLongerEligible
+                        MarkAttendanceResult.StorageFailed -> AttendanceError.AttendanceSaveFailed
+                    }
+                actions.update { it.copy(isMarkingAttendance = false, error = error) }
+            }
+    }
+
+    /** Permission was granted from the tracking prompt; start measuring the distance. */
+    fun onLocationPermissionGranted() {
+        actions.update { it.copy(error = null) }
+        restartTracking()
     }
 
     /** The permission dialog was answered without granting precise location. */
@@ -65,19 +123,20 @@ class AttendanceViewModel(
                 canAskAgain -> AttendanceError.PermissionDenied
                 else -> AttendanceError.PermissionPermanentlyDenied
             }
-        _uiState.update { it.copy(error = error) }
+        actions.update { it.copy(error = error) }
     }
 
     fun onErrorDismissed() {
-        _uiState.update { it.copy(error = null) }
+        actions.update { it.copy(error = null) }
     }
 
     /**
      * The screen came back to the foreground, possibly from system settings.
-     * Clears an error the user has since fixed there, so it doesn't linger.
+     * Clears an error the user has since fixed there, and restarts tracking if
+     * it was stopped by missing permission.
      */
     fun onScreenResumed() {
-        _uiState.update { state ->
+        actions.update { state ->
             val fixed =
                 when (state.error) {
                     AttendanceError.PermissionDenied,
@@ -85,10 +144,21 @@ class AttendanceViewModel(
                     AttendanceError.PreciseLocationDenied,
                     -> locationRepository.hasLocationPermission()
                     AttendanceError.LocationDisabled -> locationRepository.isLocationEnabled()
-                    AttendanceError.LocationUnavailable, AttendanceError.SaveFailed, null -> false
+                    else -> false
                 }
             if (fixed) state.copy(error = null) else state
         }
+        val status = uiState.value.status
+        if (status is AttendanceStatus.LocationUnavailable &&
+            status.error == LocationError.PermissionDenied &&
+            locationRepository.hasLocationPermission()
+        ) {
+            restartTracking()
+        }
+    }
+
+    private fun restartTracking() {
+        trackingRestarts.update { it + 1 }
     }
 
     private fun LocationError.toAttendanceError() = when (this) {
@@ -103,9 +173,11 @@ class AttendanceViewModel(
                 initializer {
                     val container = (this[APPLICATION_KEY] as TetherAttendanceApp).container
                     AttendanceViewModel(
-                        officeLocationRepository = container.officeLocationRepository,
+                        observeAttendanceStatus = container.observeAttendanceStatusUseCase(),
+                        attendanceRepository = container.attendanceRepository,
                         locationRepository = container.locationRepository,
                         setOfficeLocation = container.setOfficeLocationUseCase(),
+                        markAttendance = container.markAttendanceUseCase(),
                     )
                 }
             }

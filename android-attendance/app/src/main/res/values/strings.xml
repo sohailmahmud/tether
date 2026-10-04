@@ -23,23 +23,45 @@
     <!-- Distance -->
     <string name="distance_unknown">—</string>
     <string name="distance_away">Away</string>
+    <string name="distance_description">You are %1$s away from the office</string>
+    <string name="gps_accuracy">GPS accuracy ±%1$d m</string>
     <string name="range_office_not_set">Office not set</string>
-    <string name="range_unknown">Distance unknown</string>
     <string name="range_hint_office_not_set">Set the office location to start checking your distance.</string>
-    <string name="range_hint">Move within %1$d meters of the designated office location to enable check-in.</string>
+    <string name="range_locating">Locating</string>
+    <string name="range_hint_locating">Getting your current location…</string>
+    <string name="range_permission_needed">Permission needed</string>
+    <string name="range_hint_permission_needed">Allow precise location to see how far you are from the office.</string>
+    <string name="range_location_off">Location off</string>
+    <string name="range_hint_location_off">Turn on location to see how far you are from the office.</string>
+    <string name="range_no_signal">No GPS signal</string>
+    <string name="range_hint_no_signal">Searching for a location fix. Moving near a window or outdoors helps.</string>
+    <string name="range_in_range">In range</string>
+    <string name="range_hint_in_range">You are %1$s from the office. You can mark attendance now.</string>
+    <string name="range_out_of_range">Out of range</string>
+    <string name="range_hint_out_of_range">You are %1$s away from the office. Move within %2$d meters of the designated office location to enable check-in.</string>
+    <string name="range_weak_signal">Weak GPS signal</string>
+    <string name="range_hint_weak_signal">Your location is only accurate to ±%1$d m. Check-in needs ±%2$d m or better; moving near a window or outdoors helps.</string>
+    <string name="range_hint_accuracy_unknown">Your location\'s accuracy is unknown, so check-in stays locked until a more precise fix arrives.</string>
+    <string name="action_allow_location">Allow location</string>
+    <string name="action_turn_on_location_long">Turn on location</string>
 
     <!-- Mark attendance -->
     <string name="mark_attendance">Mark Attendance</string>
     <string name="mark_attendance_locked">Check-in locked</string>
+    <string name="mark_attendance_unlocked">Check-in available</string>
     <string name="mark_attendance_rule">Opens within %1$d m of the office</string>
+    <string name="last_marked_today">Last marked today at %1$s, %2$s from the office</string>
+    <string name="last_marked">Last marked %1$s, %2$s from the office</string>
 
     <!-- Errors -->
-    <string name="error_permission_denied">Location permission is needed to set the office location.</string>
+    <string name="error_permission_denied">Location permission is needed to set the office and check your distance.</string>
     <string name="error_permission_permanently_denied">Location permission is turned off for this app. Allow it in Settings to continue.</string>
     <string name="error_precise_location_denied">Precise location is needed. Approximate location can be off by more than the 50 m check-in radius.</string>
     <string name="error_location_disabled">Location is turned off on this device.</string>
     <string name="error_location_unavailable">Couldn\'t get a location fix. Move somewhere with a clearer view of the sky and try again.</string>
-    <string name="error_save_failed">The office location couldn\'t be saved. Please try again.</string>
+    <string name="error_office_save_failed">The office location couldn\'t be saved. Please try again.</string>
+    <string name="error_no_longer_eligible">Your location changed before attendance was marked. Check your distance and try again.</string>
+    <string name="error_attendance_save_failed">Attendance couldn\'t be saved. Please try again.</string>
     <string name="action_open_settings">Open settings</string>
     <string name="action_turn_on_location">Turn on</string>
     <string name="action_dismiss">Dismiss</string>

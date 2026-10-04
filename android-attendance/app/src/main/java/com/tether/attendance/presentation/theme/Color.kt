@@ -18,3 +18,9 @@ internal val SlateText = Color(0xFF64748B)
 internal val SlateLine = Color(0xFFE2E8F0)
 internal val SlateTextDark = Color(0xFF94A3B8)
 internal val SlateLineDark = Color(0xFF334155)
+
+// Range states on the distance ring. Material 3 has no success/warning roles.
+internal val InRangeGreen = Color(0xFF16A34A)
+internal val InRangeGreenDark = Color(0xFF4ADE80)
+internal val WeakSignalAmber = Color(0xFFD97706)
+internal val WeakSignalAmberDark = Color(0xFFFBBF24)
