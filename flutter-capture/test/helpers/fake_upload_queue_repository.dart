@@ -111,4 +111,126 @@ class FakeUploadQueueRepository implements UploadQueueRepository {
     queue = UploadQueueSnapshot(batches: [submitted, ..._queue.batches]);
     return submitted;
   }
+
+  // --- Upload engine operations ---
+
+  /// Ids of batches whose files were "deleted" after upload.
+  final deletedFiles = <String>[];
+  int claimCount = 0;
+
+  UploadBatch _replace(String id, UploadBatch Function(UploadBatch) update) {
+    late UploadBatch updated;
+    queue = UploadQueueSnapshot(
+      draft: _queue.draft,
+      batches: [
+        for (final batch in _queue.batches)
+          if (batch.id == id) updated = update(batch) else batch,
+      ],
+    );
+    return updated;
+  }
+
+  /// When set, claimNextDueBatch() throws it (a storage failure).
+  Object? claimThrows;
+
+  @override
+  Future<UploadBatch?> claimNextDueBatch({required DateTime now}) async {
+    final error = claimThrows;
+    if (error != null) throw error;
+    final due = _queue
+        .batches
+        .reversed // oldest first
+        .where(
+          (b) =>
+              b.status == UploadStatus.pending ||
+              (b.status == UploadStatus.failed &&
+                  !(b.nextAttemptAt?.isAfter(now) ?? false)),
+        )
+        .firstOrNull;
+    if (due == null) return null;
+    claimCount++;
+    return _replace(due.id, (b) => b.withStatus(UploadStatus.uploading));
+  }
+
+  @override
+  Future<int> makeFailedDueNow({required DateTime now}) async {
+    final failed = _queue.batches
+        .where((b) => b.status == UploadStatus.failed)
+        .toList();
+    for (final batch in failed) {
+      _replace(
+        batch.id,
+        (b) => b.withStatus(UploadStatus.failed, nextAttemptAt: now),
+      );
+    }
+    return failed.length;
+  }
+
+  @override
+  Future<void> markCompleted(String batchId) async {
+    _replace(batchId, (b) => b.withStatus(UploadStatus.completed));
+    deletedFiles.add(batchId);
+  }
+
+  @override
+  Future<void> markFailed(
+    String batchId, {
+    required String error,
+    required DateTime nextAttemptAt,
+  }) async {
+    _replace(
+      batchId,
+      (b) => b.withStatus(
+        UploadStatus.failed,
+        retryCount: b.retryCount + 1,
+        lastError: error,
+        nextAttemptAt: nextAttemptAt,
+      ),
+    );
+  }
+
+  /// Batches to report as recovered by the next recoverInterruptedUploads().
+  int recoveredOnNextCall = 0;
+  DateTime? lastRecoveryCutoff;
+
+  @override
+  Future<int> recoverInterruptedUploads({required DateTime olderThan}) async {
+    lastRecoveryCutoff = olderThan;
+    final recovered = recoveredOnNextCall;
+    recoveredOnNextCall = 0;
+    return recovered;
+  }
+
+  @override
+  Future<DateTime?> nextRetryAt() async {
+    final times =
+        _queue.batches
+            .where((b) => b.status == UploadStatus.failed)
+            .map((b) => b.nextAttemptAt)
+            .whereType<DateTime>()
+            .toList()
+          ..sort();
+    return times.firstOrNull;
+  }
+}
+
+extension TestBatchCopy on UploadBatch {
+  UploadBatch copyWithNextAttempt(DateTime nextAttemptAt) =>
+      withStatus(status, nextAttemptAt: nextAttemptAt);
+
+  UploadBatch withStatus(
+    UploadStatus status, {
+    int? retryCount,
+    String? lastError,
+    DateTime? nextAttemptAt,
+  }) => UploadBatch(
+    id: id,
+    createdAt: createdAt,
+    submittedAt: submittedAt,
+    status: status,
+    retryCount: retryCount ?? this.retryCount,
+    lastError: lastError ?? this.lastError,
+    nextAttemptAt: nextAttemptAt ?? this.nextAttemptAt,
+    items: items,
+  );
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../domain/entities/camera_failure.dart';
+import '../uploads/cubit/sync_cubit.dart';
 import '../uploads/cubit/upload_queue_cubit.dart';
 import '../uploads/cubit/upload_queue_state.dart';
 import '../uploads/pending_uploads_screen.dart';
@@ -61,10 +62,14 @@ class _CameraPreviewScreenState extends State<CameraPreviewScreen> {
     unawaited(camera.onScreenShown());
   }
 
-  /// "Upload batch": queues the photos taken so far and shows the queue.
+  /// "Upload batch": queues the photos taken so far, starts uploading, and
+  /// shows the queue.
   Future<void> _uploadBatch() async {
+    final sync = context.read<SyncCubit>();
     final submitted = await context.read<UploadQueueCubit>().submitDraft();
-    if (submitted && mounted) await _openPendingUploads();
+    if (!submitted) return;
+    unawaited(sync.sync());
+    if (mounted) await _openPendingUploads();
   }
 
   @override

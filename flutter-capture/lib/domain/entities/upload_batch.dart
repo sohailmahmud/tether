@@ -13,6 +13,7 @@ class UploadBatch extends Equatable {
     required this.items,
     this.lastError,
     this.submittedAt,
+    this.nextAttemptAt,
   });
 
   final String id;
@@ -27,6 +28,9 @@ class UploadBatch extends Equatable {
 
   /// When the user sent the batch for upload; null while it is a draft.
   final DateTime? submittedAt;
+
+  /// Earliest automatic retry after a failure; null when not waiting.
+  final DateTime? nextAttemptAt;
 
   /// Photos in capture order.
   final List<UploadItem> items;
@@ -43,6 +47,7 @@ class UploadBatch extends Equatable {
     retryCount,
     lastError,
     submittedAt,
+    nextAttemptAt,
     items,
   ];
 }

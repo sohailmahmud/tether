@@ -1,17 +1,25 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tether_capture/data/datasources/mock_server_settings.dart';
 import 'package:tether_capture/domain/entities/camera_capabilities.dart';
 import 'package:tether_capture/domain/entities/camera_failure.dart';
 import 'package:tether_capture/domain/repositories/camera_repository.dart';
+import 'package:tether_capture/domain/usecases/process_upload_queue.dart';
 import 'package:tether_capture/presentation/camera/camera_preview_screen.dart';
 import 'package:tether_capture/presentation/camera/cubit/camera_cubit.dart';
 import 'package:tether_capture/presentation/camera/cubit/camera_state.dart';
 import 'package:tether_capture/presentation/camera/widgets/focus_indicator.dart';
+import 'package:tether_capture/presentation/uploads/cubit/mock_server_cubit.dart';
+import 'package:tether_capture/presentation/uploads/cubit/sync_cubit.dart';
 import 'package:tether_capture/presentation/uploads/cubit/upload_queue_cubit.dart';
 import 'package:tether_capture/presentation/uploads/pending_uploads_screen.dart';
 
 import '../../helpers/fake_camera_repository.dart';
+import '../../helpers/fake_upload_api.dart';
 import '../../helpers/fake_upload_queue_repository.dart';
 
 const _previewKey = Key('preview');
@@ -19,11 +27,14 @@ const _previewKey = Key('preview');
 void main() {
   late FakeCameraRepository camera;
   late FakeUploadQueueRepository uploads;
+  late FakeUploadApi api;
   late CameraCubit cubit;
 
   setUp(() {
     camera = FakeCameraRepository();
     uploads = FakeUploadQueueRepository();
+    // Uploads hang, so a submitted batch stays visibly "uploading".
+    api = FakeUploadApi()..gate = Completer<void>();
   });
 
   Future<void> pumpScreen(WidgetTester tester) async {
@@ -39,6 +50,15 @@ void main() {
         providers: [
           BlocProvider(create: (_) => cubit = CameraCubit(camera, uploads)),
           BlocProvider(create: (_) => UploadQueueCubit(uploads)),
+          BlocProvider(
+            create: (_) =>
+                SyncCubit(ProcessUploadQueue(queue: uploads, api: api)),
+          ),
+          BlocProvider(
+            create: (_) => MockServerCubit(
+              MockServerSettings(File('/nonexistent/mode.txt')),
+            ),
+          ),
         ],
         child: MaterialApp(
           home: CameraPreviewScreen(
@@ -177,22 +197,26 @@ void main() {
     });
 
     testWidgets(
-      'Upload batch queues the photos, shows Pending Uploads, and the camera '
-      'reopens on return',
+      'Upload batch queues the photos, starts uploading, shows Pending Uploads, '
+      'and the camera reopens on return',
       (tester) async {
         await pumpScreen(tester);
         await tester.tap(find.bySemanticsLabel('Take photo'));
         await tester.pumpAndSettle();
 
         await tester.tap(find.text('Upload batch (1)'));
-        await tester.pumpAndSettle();
+        // Not pumpAndSettle: the upload's progress bars animate until it ends.
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
 
         expect(find.byType(PendingUploadsScreen), findsOneWidget);
-        expect(find.text('Waiting to upload'), findsOneWidget);
+        expect(find.text('Uploading'), findsOneWidget);
+        expect(api.uploadedIds, hasLength(1));
         expect(camera.isOpen, isFalse, reason: 'released while covered');
 
         await tester.tap(find.text('Start new upload batch'));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
 
         expect(find.byKey(_previewKey), findsOneWidget);
         expect(camera.openCount, 2);

@@ -149,6 +149,175 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     return snapshot.batches.firstWhere((batch) => batch.id == batchId);
   });
 
+  @override
+  Future<UploadBatch?> claimNextDueBatch({
+    required DateTime now,
+  }) => _write(() async {
+    final String? batchId;
+    try {
+      // Select and update in one transaction: on Android the plugin queues
+      // other isolates' calls until it commits, so the background worker
+      // can't read the same batch in between. EXCLUSIVE extends that to any
+      // other connection to the file.
+      batchId = await _db.transaction((txn) async {
+        final rows = await txn.query(
+          _batches,
+          columns: ['id', 'status'],
+          where:
+              'status = ? OR (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))',
+          whereArgs: [
+            UploadStatus.pending.name,
+            UploadStatus.failed.name,
+            now.millisecondsSinceEpoch,
+          ],
+          orderBy: 'submitted_at, created_at',
+          limit: 1,
+        );
+        if (rows.isEmpty) return null;
+        final id = rows.single['id']! as String;
+        // Conditional on the status just read: a second guard against a
+        // double claim, independent of the transaction mode.
+        final claimed = await txn.update(
+          _batches,
+          {
+            'status': UploadStatus.uploading.name,
+            'updated_at': now.millisecondsSinceEpoch,
+          },
+          where: 'id = ? AND status = ?',
+          whereArgs: [id, rows.single['status']],
+        );
+        if (claimed != 1) return null;
+        await txn.update(
+          _items,
+          {'status': UploadStatus.uploading.name},
+          where: 'batch_id = ?',
+          whereArgs: [id],
+        );
+        return id;
+      }, exclusive: true);
+    } on DatabaseException catch (e) {
+      throw UploadQueueException('The next upload could not be started', e);
+    }
+    if (batchId == null) return null;
+    _changes.add(null);
+    return _loadBatch(batchId);
+  });
+
+  @override
+  Future<int> makeFailedDueNow({required DateTime now}) => _write(() async {
+    final count = await _db.update(
+      _batches,
+      {'next_attempt_at': now.millisecondsSinceEpoch},
+      where: 'status = ?',
+      whereArgs: [UploadStatus.failed.name],
+    );
+    if (count > 0) _changes.add(null);
+    return count;
+  });
+
+  @override
+  Future<void> markCompleted(String batchId) => _write(() async {
+    final now = _clock().millisecondsSinceEpoch;
+    await _db.transaction((txn) async {
+      await txn.update(
+        _batches,
+        {
+          'status': UploadStatus.completed.name,
+          'last_error': null,
+          'next_attempt_at': null,
+          'updated_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [batchId],
+      );
+      await txn.update(
+        _items,
+        {'status': UploadStatus.completed.name},
+        where: 'batch_id = ?',
+        whereArgs: [batchId],
+      );
+    });
+    // Files go only after the completed status is committed. If the app dies
+    // in between, the files remain and nothing is lost.
+    await _photos.deleteBatch(batchId);
+    _changes.add(null);
+  });
+
+  @override
+  Future<void> markFailed(
+    String batchId, {
+    required String error,
+    required DateTime nextAttemptAt,
+  }) => _write(() async {
+    final now = _clock().millisecondsSinceEpoch;
+    await _db.transaction((txn) async {
+      await txn.rawUpdate(
+        'UPDATE $_batches SET status = ?, retry_count = retry_count + 1, '
+        'last_error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?',
+        [
+          UploadStatus.failed.name,
+          error,
+          nextAttemptAt.millisecondsSinceEpoch,
+          now,
+          batchId,
+        ],
+      );
+      await txn.rawUpdate(
+        'UPDATE $_items SET status = ?, retry_count = retry_count + 1 WHERE batch_id = ?',
+        [UploadStatus.failed.name, batchId],
+      );
+    });
+    _changes.add(null);
+  });
+
+  @override
+  Future<int> recoverInterruptedUploads({required DateTime olderThan}) =>
+      _write(() async {
+        final recovered = await _db.transaction((txn) async {
+          final rows = await txn.query(
+            _batches,
+            columns: ['id'],
+            where: 'status = ? AND updated_at < ?',
+            whereArgs: [
+              UploadStatus.uploading.name,
+              olderThan.millisecondsSinceEpoch,
+            ],
+          );
+          for (final row in rows) {
+            final id = row['id']! as String;
+            await txn.update(
+              _batches,
+              {
+                'status': UploadStatus.pending.name,
+                'last_error': 'The previous upload attempt was interrupted.',
+                'updated_at': _clock().millisecondsSinceEpoch,
+              },
+              where: 'id = ? AND status = ?',
+              whereArgs: [id, UploadStatus.uploading.name],
+            );
+            await txn.update(
+              _items,
+              {'status': UploadStatus.pending.name},
+              where: 'batch_id = ?',
+              whereArgs: [id],
+            );
+          }
+          return rows.length;
+        });
+        if (recovered > 0) _changes.add(null);
+        return recovered;
+      });
+
+  @override
+  Future<DateTime?> nextRetryAt() async {
+    final rows = await _db.rawQuery(
+      'SELECT MIN(next_attempt_at) AS next FROM $_batches WHERE status = ?',
+      [UploadStatus.failed.name],
+    );
+    final next = rows.single['next'] as int?;
+    return next == null ? null : DateTime.fromMillisecondsSinceEpoch(next);
+  }
+
   /// Releases the database. The app never needs this; tests do.
   Future<void> close() async {
     await _changes.close();
@@ -176,6 +345,21 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     });
     return id;
   }
+
+  Future<UploadBatch> _loadBatch(String id) => _db.transaction((txn) async {
+    final batchRow = (await txn.query(
+      _batches,
+      where: 'id = ?',
+      whereArgs: [id],
+    )).single;
+    final itemRows = await txn.query(
+      _items,
+      where: 'batch_id = ?',
+      whereArgs: [id],
+      orderBy: 'created_at, id',
+    );
+    return _batchFromRow(batchRow, itemRows.map(_itemFromRow).toList());
+  });
 
   /// Reads batches and items in one transaction, so they are consistent.
   Future<UploadQueueSnapshot> _snapshot() => _db.transaction((txn) async {
@@ -215,6 +399,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
 
   UploadBatch _batchFromRow(Map<String, Object?> row, List<UploadItem> items) {
     final submittedAt = row['submitted_at'] as int?;
+    final nextAttemptAt = row['next_attempt_at'] as int?;
     return UploadBatch(
       id: row['id']! as String,
       createdAt: DateTime.fromMillisecondsSinceEpoch(row['created_at']! as int),
@@ -224,6 +409,9 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
       submittedAt: submittedAt == null
           ? null
           : DateTime.fromMillisecondsSinceEpoch(submittedAt),
+      nextAttemptAt: nextAttemptAt == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(nextAttemptAt),
       items: items,
     );
   }
