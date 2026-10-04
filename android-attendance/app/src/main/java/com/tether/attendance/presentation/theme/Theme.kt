@@ -14,6 +14,8 @@ private val LightColors =
         secondary = BrandNavy,
         background = CanvasLight,
         surface = Color.White,
+        onSurfaceVariant = SlateText,
+        outlineVariant = SlateLine,
         error = OutOfRangeRed,
     )
 
@@ -23,6 +25,8 @@ private val DarkColors =
         secondary = BrandBlueDark,
         background = CanvasDark,
         surface = SurfaceDark,
+        onSurfaceVariant = SlateTextDark,
+        outlineVariant = SlateLineDark,
         error = OutOfRangeRedDark,
     )
 

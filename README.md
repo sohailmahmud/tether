@@ -21,7 +21,9 @@ The name comes from what both apps do. Attendance is tethered to a 50 m radius a
 tether/
 ├── android-attendance/          Task 1: native Android app
 │   └── app/src/main/java/com/tether/attendance/
-│       ├── data/                local storage, location source, repository implementations
+│       ├── data/
+│       │   ├── local/           office location in Preferences DataStore
+│       │   └── location/        device position from the fused location provider
 │       ├── domain/              models, repository contracts, use cases
 │       ├── presentation/        Compose UI, ViewModels, theme
 │       └── di/                  manual dependency wiring
@@ -38,7 +40,13 @@ tether/
 
 ### Tether Attendance (Android)
 
-The app has three layers: **presentation → domain → data**. Compose renders a single `StateFlow` of UI state, which a `ViewModel` exposes. The ViewModel calls domain use cases. Repositories hide the location provider and local storage behind interfaces. Dependencies are wired by hand: one screen does not justify a DI framework.
+The app has three layers: **presentation → domain → data**.
+
+- **Presentation:** `AttendanceScreen` is a stateless Compose screen that renders one `AttendanceUiState`. `AttendanceViewModel` exposes that state as a `StateFlow`. `AttendanceRoute` connects the two and handles the Android parts the ViewModel must not touch: the permission dialog and the system settings screens.
+- **Domain:** models (`OfficeLocation`, `LocationData`), repository interfaces, and `SetOfficeLocationUseCase`, which takes a fresh fix and saves it as the office. `AttendancePolicy` is the only place the 50 m radius is defined.
+- **Data:** `FusedLocationRepository` (Google Play services location) and `DataStoreOfficeLocationRepository`. Each data source has exactly one repository, so the repository lives next to its source instead of in a separate pass-through layer.
+
+The ViewModel reads the saved office straight from the repository's `Flow`, which makes storage the single source of truth: a successful save reaches the screen through that flow. A use case exists only where there is logic to coordinate. Dependencies are wired by hand in `AppContainer`, because one screen and two repositories don't justify a DI framework.
 
 ### Tether Capture (Flutter)
 
@@ -50,7 +58,9 @@ _To be written once the features are implemented._
 
 ## Local persistence
 
-_To be written once the features are implemented._
+**Tether Attendance:** the office location is kept in Preferences DataStore (`office_location`): latitude, longitude, fix accuracy and save time. All four are written in one transaction, so a read never mixes old and new values. A missing, partial or out-of-range record reads as "no office set". Backup and device-to-device transfer are disabled for the app's data, so the geofence can't be moved by editing a backup.
+
+_Flutter queue persistence: to be written once implemented._
 
 ## Sync strategy
 
@@ -58,7 +68,20 @@ _To be written once the features are implemented._
 
 ## Error handling
 
-_To be written once the features are implemented._
+**Tether Attendance:** every failure becomes a banner on the screen. Where the user can fix the cause, the banner offers that fix.
+
+| Situation | What the user sees |
+|---|---|
+| Location permission denied | Explanation; tapping Set Office Location asks again |
+| Denied twice ("don't ask again") | Explanation and **Open settings** |
+| Only approximate location granted | Precise location is required for a 50 m check, with **Open settings** |
+| Location services off | **Turn on**, which opens location settings |
+| No fix within 30 s | Advice to retry somewhere with a clearer view of the sky |
+| Storage write fails | Retry message; the previous office is kept |
+
+When the user returns from Settings having fixed the cause, the banner clears automatically. Replacing an existing office location asks for confirmation first, because it moves the geofence.
+
+_Flutter: to be written once implemented._
 
 ## Mock API
 
@@ -82,7 +105,7 @@ _To be written._
 
 ## How to run
 
-**Prerequisites:** JDK 17+, Android SDK 36, Flutter 3.44.x stable, and an Android device or emulator. A physical device is recommended for GPS and camera.
+**Prerequisites:** JDK 17+, Android SDK 37, Flutter 3.44.x stable, and an Android device or emulator. A physical device is recommended for GPS and camera.
 
 ```bash
 git clone <repository-url>
