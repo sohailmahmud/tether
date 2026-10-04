@@ -2,4 +2,45 @@
 <resources>
     <string name="app_name">Tether Attendance</string>
     <string name="attendance_title">Attendance</string>
+
+    <!-- Step 1: office context -->
+    <string name="office_step_label">Step 1: Office context</string>
+    <string name="office_status_set">Office location set</string>
+    <string name="office_status_not_set">Office location not set</string>
+    <string name="office_coordinates">Lat: %1$s, Lon: %2$s</string>
+    <string name="office_not_set_chip">No office location yet</string>
+    <string name="office_description">To mark your attendance, ensure your current office location is correctly identified.</string>
+    <string name="office_accuracy">Accuracy ±%1$d m</string>
+    <string name="office_accuracy_unknown">Accuracy unknown</string>
+    <string name="office_saved_at">Saved %1$s</string>
+    <string name="set_office_location">Set Office Location</string>
+    <string name="setting_office_location">Getting your location…</string>
+    <string name="replace_office_title">Replace office location?</string>
+    <string name="replace_office_message">Your current position will become the new office location. Attendance will then be checked against it.</string>
+    <string name="replace_office_confirm">Replace</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Distance -->
+    <string name="distance_unknown">—</string>
+    <string name="distance_away">Away</string>
+    <string name="range_office_not_set">Office not set</string>
+    <string name="range_unknown">Distance unknown</string>
+    <string name="range_hint_office_not_set">Set the office location to start checking your distance.</string>
+    <string name="range_hint">Move within %1$d meters of the designated office location to enable check-in.</string>
+
+    <!-- Mark attendance -->
+    <string name="mark_attendance">Mark Attendance</string>
+    <string name="mark_attendance_locked">Check-in locked</string>
+    <string name="mark_attendance_rule">Opens within %1$d m of the office</string>
+
+    <!-- Errors -->
+    <string name="error_permission_denied">Location permission is needed to set the office location.</string>
+    <string name="error_permission_permanently_denied">Location permission is turned off for this app. Allow it in Settings to continue.</string>
+    <string name="error_precise_location_denied">Precise location is needed. Approximate location can be off by more than the 50 m check-in radius.</string>
+    <string name="error_location_disabled">Location is turned off on this device.</string>
+    <string name="error_location_unavailable">Couldn\'t get a location fix. Move somewhere with a clearer view of the sky and try again.</string>
+    <string name="error_save_failed">The office location couldn\'t be saved. Please try again.</string>
+    <string name="action_open_settings">Open settings</string>
+    <string name="action_turn_on_location">Turn on</string>
+    <string name="action_dismiss">Dismiss</string>
 </resources>

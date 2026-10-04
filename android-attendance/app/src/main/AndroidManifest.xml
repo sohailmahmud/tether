@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Foreground location only. Fine is what the 50 m check needs; coarse must
+         be requested alongside it on Android 12+. No background location: the
+         distance is only needed while the screen is open. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- Backup and device transfer are off: backup tooling could be used to
          edit the stored office location and move the geofence. allowBackup
          and fullBackupContent cover API 26-30; dataExtractionRules covers
          Android 12+. -->
     <application
+        android:name=".TetherAttendanceApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

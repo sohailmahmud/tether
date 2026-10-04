@@ -12,3 +12,9 @@ internal val BrandBlueDark = Color(0xFF93B4FF)
 internal val CanvasDark = Color(0xFF0F172A)
 internal val SurfaceDark = Color(0xFF1E293B)
 internal val OutOfRangeRedDark = Color(0xFFF87171)
+
+// Secondary text and hairlines (slate), so neutral UI matches the reference instead of Material's purple-grey defaults.
+internal val SlateText = Color(0xFF64748B)
+internal val SlateLine = Color(0xFFE2E8F0)
+internal val SlateTextDark = Color(0xFF94A3B8)
+internal val SlateLineDark = Color(0xFF334155)
