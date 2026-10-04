@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Toolchain versions are pinned to the newest that Flutter 3.44 supports
+         (AGP 9.1, Kotlin 2.3.20, Gradle 9.3.1), so both apps in this
+         repository build on one toolchain. -->
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+
+    <!-- targetSdk 36 is deliberate: Android 17 (API 37) behaviour changes are
+         not verified on a device for this submission. -->
+    <issue id="OldTargetApi" severity="ignore" />
+</lint>
