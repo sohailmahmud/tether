@@ -99,8 +99,8 @@ Layered architecture with BLoC/Cubit state management: **presentation (widgets +
 |---|---|
 | `CameraCubit` | Owns the camera screen: permission, opening and releasing the camera (with the app lifecycle and while another screen covers it), zoom (buttons, slider, pinch), tap-to-focus, and capture straight into the upload queue. Its sealed `CameraState` is Starting, PermissionRequired, Unavailable, Paused or Ready. |
 | `UploadQueueCubit` | Follows the persistent upload queue (the batch being captured and the submitted batches) for the camera badge and the Pending Uploads screen, and submits the batch being captured when the user taps **Upload batch**. |
-
-_Sync classes: to be written once implemented._
+| `SyncCubit` | Runs the upload engine (`ProcessUploadQueue`) when an upload should start (app launch, a submitted batch, **Retry now**) and shows when a run is in progress. Per-batch progress comes from the queue itself. |
+| `MockServerCubit` | Holds the mock server mode chosen on Pending Uploads, so reviewers can trigger each failure path. |
 
 ## Local persistence
 
@@ -128,7 +128,23 @@ Repository tests run real SQL through `sqflite_common_ffi`, including closing an
 
 ## Sync strategy
 
-_To be written once the features are implemented._
+**Tether Capture**'s upload engine, `ProcessUploadQueue` (a pure-Dart domain use case), uploads due batches one at a time:
+
+1. **Recover:** a batch left in *uploading* for longer than a 5-minute lease (the app was killed mid-upload) goes back to *pending*.
+2. **Claim:** the oldest due batch (*pending*, or *failed* whose retry time has passed) is marked *uploading*. The read and update happen in one exclusive SQLite transaction, and the update only applies if the status is still the one just read. Only one worker can claim a batch. On Android, sqflite gives the app and a background worker isolate the same native connection and queues one isolate's calls while the other's transaction is open. A test with two independent workers claiming at the same time checks that no batch is taken twice. Removing the atomic claim makes that test fail with 12 claims for 6 batches.
+3. **Upload** through `UploadApi.uploadBatch`, with the batch id as an idempotency key.
+4. **Record the outcome:**
+   - **Success:** the batch and its photos become *completed*. The photo files are deleted only after that is committed.
+   - **Failure:** the batch becomes *failed*. Photos and records stay, the attempt is counted, the error is kept for display, and the next attempt is scheduled with exponential backoff (30 s, doubling, capped at 15 min).
+   - **No connection:** the run stops, since every other batch would fail the same way.
+
+Required invariant, covered by tests and checked on the test phone: **failed upload → images remain → queue records remain → retry possible.**
+
+Overlapping triggers share one run. A batch submitted mid-run is picked up before the run ends. An unexpected API exception still counts as a failed attempt, so a batch is never left stuck.
+
+**When uploads start:** on app launch, right after **Upload batch**, and on **Retry now** on Pending Uploads, which retries failed batches without waiting for their backoff. **Retry now** is a convenience only.
+
+**Storage:** schema version 2 adds `next_attempt_at`. Existing installs are upgraded in place; this was checked on the test phone, whose queue was kept through the upgrade.
 
 ## Error handling
 
@@ -175,11 +191,29 @@ The app requests only the camera permission it needs. The camera plugin's microp
 | Upload batch fails to write | A snackbar; the photos stay in the batch being captured |
 | The queue can't be read | Pending Uploads says so |
 
-_Sync: to be written once implemented._
+**Tether Capture**, uploads:
+
+| Situation | What the user sees |
+|---|---|
+| Upload fails (no internet, timeout, server error) | The batch shows "Failed once" (or "Failed N×"), the error, and when it is due again. Photos stay on the device, and **Retry now** is offered |
+| Upload interrupted by the app closing | The batch returns to "Waiting to upload" with a note, and is retried |
+| Upload succeeds | "Uploaded", and the photos are removed from the device |
 
 ## Mock API
 
-_To be written once the features are implemented._
+The assessment provides no backend, so `MockUploadApi` implements `UploadApi`. It is a data-layer class; the UI only chooses its mode.
+
+- **Real connectivity:** if the device has no network (e.g. airplane mode), every upload fails with "No internet connection", whatever the mode.
+- **Modes**, chosen from **Mock server** on Pending Uploads and saved to a file so a background worker would use the same mode:
+
+| Mode | Behaviour |
+|---|---|
+| Normal | Succeeds after a transfer time based on batch size (about 2 MB/s, at least 0.5 s) |
+| Slow connection | About 16 KB/s, so a real photo batch times out after 8 s |
+| Server error | Fails with 503 Service Unavailable |
+| Unstable connection | About half of the uploads drop part-way |
+
+- **Idempotent:** re-sending a batch it already stored returns the same receipt instead of storing it twice, which is what a real API must do with the batch-id key.
 
 ## Generative AI usage
 
@@ -259,3 +293,6 @@ _To be added._
 - On Android the zoom shortcuts reflect what the main back camera exposes through its zoom range. Phones that show an ultra-wide lens only as a separate camera, not through zoom below 1x, get no 0.5x button.
 - Individual photos can't be removed from a batch before upload.
 - If the app is killed between moving a photo into storage and recording it (a few milliseconds), that file is left unreferenced. It is never uploaded, and only uses storage.
+- Failed batches are not yet retried automatically when their retry time arrives or when the connection returns. They are retried on the next app launch, the next **Upload batch**, or **Retry now**.
+- There is no upload percentage; a batch shows as uploading until it finishes.
+- Uploaded batches stay listed (without their photos) until the app's data is cleared.

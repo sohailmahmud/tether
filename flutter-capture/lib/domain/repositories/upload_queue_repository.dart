@@ -22,6 +22,36 @@ abstract interface class UploadQueueRepository {
   ///
   /// Throws [UploadQueueException].
   Future<UploadBatch?> submitDraft();
+
+  /// Atomically claims the oldest batch that is due for upload, marking it
+  /// uploading, so no other worker (in this or another isolate) can claim it.
+  ///
+  /// Due means pending, or failed with its retry time reached ([now]).
+  /// Returns null when nothing is due.
+  Future<UploadBatch?> claimNextDueBatch({required DateTime now});
+
+  /// Makes every failed batch due at [now], for a manual "Retry now".
+  /// Returns how many were waiting.
+  Future<int> makeFailedDueNow({required DateTime now});
+
+  /// The server confirmed [batchId]: marks it and its photos completed, then
+  /// deletes the photo files. The record is kept for the user's history.
+  Future<void> markCompleted(String batchId);
+
+  /// The upload of [batchId] failed: records [error], counts the attempt, and
+  /// schedules the next automatic retry. Photos and records are kept.
+  Future<void> markFailed(
+    String batchId, {
+    required String error,
+    required DateTime nextAttemptAt,
+  });
+
+  /// Returns batches stuck in "uploading" since before [olderThan] (the app
+  /// was killed mid-upload) to pending. Returns how many were recovered.
+  Future<int> recoverInterruptedUploads({required DateTime olderThan});
+
+  /// When the earliest failed batch may be retried, or null if none is waiting.
+  Future<DateTime?> nextRetryAt();
 }
 
 /// The queue could not be read or written (storage full, file missing…).

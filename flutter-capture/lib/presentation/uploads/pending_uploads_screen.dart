@@ -1,19 +1,61 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../domain/entities/upload_status.dart';
+import 'cubit/mock_server_cubit.dart';
+import 'cubit/sync_cubit.dart';
 import 'cubit/upload_queue_cubit.dart';
 import 'cubit/upload_queue_state.dart';
 import 'widgets/batch_card.dart';
+import 'widgets/mock_server_sheet.dart';
 
 /// Lists submitted batches with their upload status. Batches stay here,
 /// files and all, until the server confirms them.
 class PendingUploadsScreen extends StatelessWidget {
   const PendingUploadsScreen({super.key});
 
+  Future<void> _chooseMockServer(BuildContext context) async {
+    final cubit = context.read<MockServerCubit>();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      // Sized to its content, scrolling on short screens.
+      isScrollControlled: true,
+      builder: (sheetContext) => MockServerSheet(
+        mode: cubit.state,
+        onSelected: (mode) {
+          unawaited(cubit.select(mode));
+          Navigator.of(sheetContext).pop();
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isSyncing = context.select(
+      (SyncCubit cubit) => cubit.state.isSyncing,
+    );
+    final mockMode = context.select((MockServerCubit cubit) => cubit.state);
     return Scaffold(
-      appBar: AppBar(title: const Text('Pending Uploads')),
+      appBar: AppBar(
+        title: const Text('Pending Uploads'),
+        actions: [
+          TextButton.icon(
+            onPressed: () => unawaited(_chooseMockServer(context)),
+            icon: const Icon(Icons.dns_outlined),
+            label: Text(MockServerSheet.label(mockMode)),
+          ),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(2),
+          child: isSyncing
+              ? const LinearProgressIndicator(minHeight: 2)
+              : const SizedBox(height: 2),
+        ),
+      ),
       body: BlocBuilder<UploadQueueCubit, UploadQueueState>(
         builder: (context, state) {
           if (!state.isLoaded) {
@@ -31,12 +73,13 @@ class PendingUploadsScreen extends StatelessWidget {
                         'confirms them.',
             );
           }
+          final anyFailed = batches.any((b) => b.status == UploadStatus.failed);
           return ListView.separated(
             padding: const EdgeInsets.all(16),
             itemCount: batches.length + 1,
             separatorBuilder: (_, _) => const SizedBox(height: 12),
             itemBuilder: (context, index) => index == 0
-                ? _Summary(state: state)
+                ? _Summary(state: state, showRetry: anyFailed && !isSyncing)
                 : BatchCard(batch: batches[index - 1]),
           );
         },
@@ -59,9 +102,10 @@ class PendingUploadsScreen extends StatelessWidget {
 }
 
 class _Summary extends StatelessWidget {
-  const _Summary({required this.state});
+  const _Summary({required this.state, required this.showRetry});
 
   final UploadQueueState state;
+  final bool showRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -71,12 +115,26 @@ class _Summary extends StatelessWidget {
         ? 'All batches uploaded'
         : '${unfinished.length == 1 ? '1 batch' : '${unfinished.length} batches'}'
               ' · ${photos == 1 ? '1 photo' : '$photos photos'} waiting';
-    return Text(
-      text.toUpperCase(),
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-        letterSpacing: 0.8,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            text.toUpperCase(),
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              letterSpacing: 0.8,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        // A convenience only: failed batches are also retried automatically.
+        if (showRetry)
+          FilledButton.tonalIcon(
+            onPressed: () =>
+                unawaited(context.read<SyncCubit>().sync(retryFailedNow: true)),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry now'),
+          ),
+      ],
     );
   }
 }

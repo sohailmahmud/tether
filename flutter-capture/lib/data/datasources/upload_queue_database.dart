@@ -1,29 +1,48 @@
 import 'package:sqflite/sqflite.dart';
 
 /// Schema and opening of the upload queue's SQLite database.
+///
+/// Versions:
+/// 1. Batches and photos.
+/// 2. `next_attempt_at` on batches, for retry backoff.
 abstract final class UploadQueueDatabase {
   static const fileName = 'upload_queue.db';
-  static const _version = 1;
+  static const version = 2;
 
   static const batches = 'upload_batches';
   static const items = 'upload_items';
 
-  /// Opens (creating if needed) the database at [path]. [factory] lets tests
-  /// use an in-process SQLite instead of the platform plugin.
+  /// Opens (creating or upgrading if needed) the database at [path].
+  ///
+  /// On Android, sqflite keeps one native connection per database file for
+  /// the whole process, so the app and the background sync worker (another
+  /// isolate) share it, and the plugin queues other isolates' calls while a
+  /// transaction is open. [factory] lets tests use an in-process SQLite;
+  /// [targetVersion] lets them create an older schema to test upgrades.
   static Future<Database> open(
     String path, {
     DatabaseFactory? factory,
+    int targetVersion = version,
   }) => (factory ?? databaseFactory).openDatabase(
     path,
     options: OpenDatabaseOptions(
-      version: _version,
-      // Off by default in SQLite; without it a photo row could outlive its batch.
-      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
-      onCreate: _create,
+      version: targetVersion,
+      onConfigure: (db) async {
+        // Off by default in SQLite; without it a photo row could outlive its batch.
+        await db.execute('PRAGMA foreign_keys = ON');
+        // Should another connection to the file ever exist (e.g. a separate
+        // process), wait for its write instead of failing with "locked".
+        await db.rawQuery('PRAGMA busy_timeout = 5000');
+      },
+      onCreate: (db, version) async {
+        await _createV1(db);
+        await _upgrade(db, 1, version);
+      },
+      onUpgrade: _upgrade,
     ),
   );
 
-  static Future<void> _create(Database db, int version) async {
+  static Future<void> _createV1(Database db) async {
     final batch = db.batch()
       ..execute('''
         CREATE TABLE $batches (
@@ -56,5 +75,14 @@ abstract final class UploadQueueDatabase {
         )''')
       ..execute('CREATE INDEX items_by_batch ON $items (batch_id, created_at)');
     await batch.commit(noResult: true);
+  }
+
+  static Future<void> _upgrade(Database db, int from, int to) async {
+    if (from < 2 && to >= 2) {
+      // Earliest time a failed batch may be retried; null means "now".
+      await db.execute(
+        'ALTER TABLE $batches ADD COLUMN next_attempt_at INTEGER',
+      );
+    }
   }
 }

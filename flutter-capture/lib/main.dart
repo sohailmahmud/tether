@@ -10,10 +10,14 @@ import 'package:sqflite/sqflite.dart';
 import 'app/app.dart';
 import 'app/app_bloc_observer.dart';
 import 'app/plugin_camera_preview.dart';
+import 'data/datasources/mock_server_settings.dart';
+import 'data/datasources/mock_upload_api.dart';
+import 'data/datasources/network_status.dart';
 import 'data/datasources/photo_store.dart';
 import 'data/datasources/upload_queue_database.dart';
 import 'data/repositories/plugin_camera_repository.dart';
 import 'data/repositories/sqflite_upload_queue_repository.dart';
+import 'domain/usecases/process_upload_queue.dart';
 
 /// Composition root: creates the concrete dependencies and starts the app.
 Future<void> main() async {
@@ -29,12 +33,26 @@ Future<void> main() async {
     ),
     photos: PhotoStore(Directory(p.join(documents.path, 'photos'))),
   );
+  final mockServerSettings = MockServerSettings(
+    File(p.join(documents.path, 'mock_server_mode.txt')),
+  );
+  final network = NetworkStatus();
+  final processUploadQueue = ProcessUploadQueue(
+    queue: uploadQueue,
+    // The assessment provides no API; see MockUploadApi.
+    api: MockUploadApi(
+      mode: mockServerSettings.read,
+      isOnline: network.isOnline,
+    ),
+  );
   final camera = PluginCameraRepository();
 
   runApp(
     TetherCaptureApp(
       cameraRepository: camera,
       uploadQueueRepository: uploadQueue,
+      processUploadQueue: processUploadQueue,
+      mockServerSettings: mockServerSettings,
       cameraPreviewBuilder: (_) => PluginCameraPreview(repository: camera),
     ),
   );

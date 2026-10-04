@@ -48,4 +48,13 @@ class PhotoStore {
       // Already gone.
     }
   }
+
+  /// Deletes every kept photo of [batchId]. Missing folders are ignored.
+  Future<void> deleteBatch(String batchId) async {
+    try {
+      await Directory(p.join(root.path, batchId)).delete(recursive: true);
+    } on PathNotFoundException {
+      // Already gone.
+    }
+  }
 }
