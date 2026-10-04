@@ -2,7 +2,6 @@ import 'package:equatable/equatable.dart';
 
 import '../../../domain/entities/camera_capabilities.dart';
 import '../../../domain/entities/camera_failure.dart';
-import '../../../domain/entities/captured_photo.dart';
 
 /// What the camera screen shows.
 sealed class CameraState extends Equatable {
@@ -38,7 +37,8 @@ final class CameraUnavailable extends CameraState {
   List<Object?> get props => [failure];
 }
 
-/// The app is in the background and the camera is released.
+/// The camera is released: the app is in the background or another screen
+/// covers the camera.
 final class CameraPaused extends CameraState {
   const CameraPaused();
 }
@@ -49,8 +49,6 @@ final class CameraReady extends CameraState {
     required this.capabilities,
     required this.zoom,
     this.isCapturing = false,
-    this.lastCapture,
-    this.captureCount = 0,
     this.captureFailed = false,
   });
 
@@ -58,35 +56,21 @@ final class CameraReady extends CameraState {
   final double zoom;
   final bool isCapturing;
 
-  /// Most recent photo this session, for the thumbnail.
-  final CapturedPhoto? lastCapture;
-  final int captureCount;
-
-  /// The last capture attempt failed; cleared once the user has been told.
+  /// The last photo could not be taken or saved; cleared once the user has
+  /// been told.
   final bool captureFailed;
 
   CameraReady copyWith({
     double? zoom,
     bool? isCapturing,
-    CapturedPhoto? lastCapture,
-    int? captureCount,
     bool? captureFailed,
   }) => CameraReady(
     capabilities: capabilities,
     zoom: zoom ?? this.zoom,
     isCapturing: isCapturing ?? this.isCapturing,
-    lastCapture: lastCapture ?? this.lastCapture,
-    captureCount: captureCount ?? this.captureCount,
     captureFailed: captureFailed ?? this.captureFailed,
   );
 
   @override
-  List<Object?> get props => [
-    capabilities,
-    zoom,
-    isCapturing,
-    lastCapture,
-    captureCount,
-    captureFailed,
-  ];
+  List<Object?> get props => [capabilities, zoom, isCapturing, captureFailed];
 }

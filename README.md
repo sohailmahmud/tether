@@ -75,11 +75,14 @@ Dependencies are wired by hand in `AppContainer`, because one screen and three r
 Layered architecture with BLoC/Cubit state management: **presentation (widgets + BLoC/Cubit) → domain → data**.
 
 - **Domain** (pure Dart, no Flutter or plugin imports):
-  - `CameraCapabilities`: the zoom range and focus support read from the device at runtime, plus the rule that picks the zoom shortcut buttons.
-  - `CapturedPhoto` and `CameraFailure`.
-  - The `CameraRepository` interface.
-- **Data:** `PluginCameraRepository` implements `CameraRepository` with the `camera` and `permission_handler` plugins.
-- **Presentation:** `CameraCubit` and `CameraPreviewScreen`, with small widgets for the zoom controls, focus indicator, shutter and thumbnail.
+  - Camera: `CameraCapabilities` (the zoom range and focus support read from the device at runtime, plus the rule that picks the zoom shortcut buttons), `CapturedPhoto`, `CameraFailure`, and the `CameraRepository` interface.
+  - Upload queue: `UploadBatch`, `UploadItem`, `UploadStatus`, `UploadQueueSnapshot`, and the `UploadQueueRepository` interface.
+- **Data:**
+  - `PluginCameraRepository` (the `camera` and `permission_handler` plugins).
+  - `SqfliteUploadQueueRepository`, backed by `UploadQueueDatabase` (SQLite schema) and `PhotoStore` (photo files).
+- **Presentation:**
+  - Camera: `CameraCubit` and `CameraPreviewScreen`, with small widgets for the zoom controls, focus indicator, shutter and thumbnail.
+  - Uploads: `UploadQueueCubit` and `PendingUploadsScreen`.
 - **Composition root** (`main.dart`, `app/`): creates the concrete repository and hands the screen a preview builder. The presentation layer never imports the camera plugin, and widget tests use a stand-in preview.
 
 #### Camera behaviour
@@ -94,9 +97,10 @@ Layered architecture with BLoC/Cubit state management: **presentation (widgets +
 
 | Class | Responsibility |
 |---|---|
-| `CameraCubit` | Owns the camera screen: permission, opening and releasing the camera with the app lifecycle, zoom (buttons, slider, pinch), tap-to-focus and capture. Its sealed `CameraState` is Starting, PermissionRequired, Unavailable, Paused or Ready. |
+| `CameraCubit` | Owns the camera screen: permission, opening and releasing the camera (with the app lifecycle and while another screen covers it), zoom (buttons, slider, pinch), tap-to-focus, and capture straight into the upload queue. Its sealed `CameraState` is Starting, PermissionRequired, Unavailable, Paused or Ready. |
+| `UploadQueueCubit` | Follows the persistent upload queue (the batch being captured and the submitted batches) for the camera badge and the Pending Uploads screen, and submits the batch being captured when the user taps **Upload batch**. |
 
-_Upload queue and sync classes: to be written once implemented._
+_Sync classes: to be written once implemented._
 
 ## Local persistence
 
@@ -107,7 +111,20 @@ _Upload queue and sync classes: to be written once implemented._
 
 Both survive app restarts. Backup and device-to-device transfer are disabled for the app's data, so the geofence can't be moved by editing a backup.
 
-_Flutter queue persistence: to be written once implemented._
+**Tether Capture** keeps its upload queue in SQLite (`sqflite`):
+
+- `upload_batches`: id, status, retry count, last error, created, submitted and updated times.
+- `upload_items`: id, batch, photo file path, status, retry count, size, capture time.
+
+The schema itself enforces integrity: foreign keys from photos to their batch (enabled on every connection), `CHECK` constraints on status values, and a partial unique index that allows only one draft batch.
+
+**Batch flow:** photos go into the open *draft* batch as they are taken. **Upload batch** turns the draft into a *pending* batch, and the next photo starts a new draft, so any number of batches can wait in the queue. Statuses are `draft → pending → uploading → failed / completed`. The master plan's four upload statuses are extended with `draft`, the batch still being captured, which is never uploaded.
+
+**Photo files:** the camera writes to the cache directory, which Android may clear at any time, so each photo is moved (an atomic rename) into app storage under `photos/<batch>/<photo>.jpg`. The database stores paths relative to that folder. If the record can't be written, the moved file is deleted, so no unreferenced file is left behind.
+
+**Why SQLite rather than Hive:** the queue needs transactions, so that batch and photo statuses change together and a batch can be claimed for upload exactly once. It also needs safe access from a background isolate (the sync worker). SQLite provides both. Hive has no transactions and doesn't support multiple isolates.
+
+Repository tests run real SQL through `sqflite_common_ffi`, including closing and reopening the database to check that the queue survives a restart. On the test phone, photos captured, queued and drafted were all still there after a force-stop and relaunch.
 
 ## Sync strategy
 
@@ -150,7 +167,15 @@ When the user returns from Settings having fixed the cause, the banner clears an
 
 The app requests only the camera permission it needs. The camera plugin's microphone and storage permissions are removed from the manifest, because no audio is recorded and photos stay in app storage.
 
-_Upload queue and sync: to be written once implemented._
+**Tether Capture**, upload queue:
+
+| Situation | What the user sees |
+|---|---|
+| A photo can't be saved to the queue (e.g. storage full) | The same "couldn't take the photo" snackbar; nothing half-saved is left behind |
+| Upload batch fails to write | A snackbar; the photos stay in the batch being captured |
+| The queue can't be read | Pending Uploads says so |
+
+_Sync: to be written once implemented._
 
 ## Mock API
 
@@ -232,4 +257,5 @@ _To be added._
 - The UI is locked to portrait, and photos are taken in portrait orientation.
 - There is no front-camera switch or flash control; the brief asks for back-camera zoom and focus only.
 - On Android the zoom shortcuts reflect what the main back camera exposes through its zoom range. Phones that show an ultra-wide lens only as a separate camera, not through zoom below 1x, get no 0.5x button.
-- Photos taken so far are listed only for the current session; persisting them in an upload queue comes with batch management.
+- Individual photos can't be removed from a batch before upload.
+- If the app is killed between moving a photo into storage and recording it (a few milliseconds), that file is left unreferenced. It is never uploaded, and only uses storage.

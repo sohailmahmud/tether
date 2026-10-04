@@ -8,16 +8,23 @@ import 'package:tether_capture/presentation/camera/camera_preview_screen.dart';
 import 'package:tether_capture/presentation/camera/cubit/camera_cubit.dart';
 import 'package:tether_capture/presentation/camera/cubit/camera_state.dart';
 import 'package:tether_capture/presentation/camera/widgets/focus_indicator.dart';
+import 'package:tether_capture/presentation/uploads/cubit/upload_queue_cubit.dart';
+import 'package:tether_capture/presentation/uploads/pending_uploads_screen.dart';
 
 import '../../helpers/fake_camera_repository.dart';
+import '../../helpers/fake_upload_queue_repository.dart';
 
 const _previewKey = Key('preview');
 
 void main() {
   late FakeCameraRepository camera;
+  late FakeUploadQueueRepository uploads;
   late CameraCubit cubit;
 
-  setUp(() => camera = FakeCameraRepository());
+  setUp(() {
+    camera = FakeCameraRepository();
+    uploads = FakeUploadQueueRepository();
+  });
 
   Future<void> pumpScreen(WidgetTester tester) async {
     // A phone-sized portrait screen.
@@ -25,12 +32,16 @@ void main() {
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(
-        // The provider owns and closes the cubit, as in the app. Closing it
-        // from addTearDown would hang: teardown runs after fake time stops.
-        home: BlocProvider(
-          create: (_) => cubit = CameraCubit(camera),
-          child: CameraPreviewScreen(
+      // As in the app: providers above the navigator, so pushed screens share
+      // them. They also own and close the cubits; closing from addTearDown
+      // would hang, because teardown runs after fake time stops.
+      MultiBlocProvider(
+        providers: [
+          BlocProvider(create: (_) => cubit = CameraCubit(camera, uploads)),
+          BlocProvider(create: (_) => UploadQueueCubit(uploads)),
+        ],
+        child: MaterialApp(
+          home: CameraPreviewScreen(
             previewBuilder: (_) =>
                 const ColoredBox(key: _previewKey, color: Colors.grey),
           ),
@@ -140,8 +151,19 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('the shutter takes a photo and counts it', (tester) async {
+    testWidgets('the shutter adds photos to the batch being built', (
+      tester,
+    ) async {
       await pumpScreen(tester);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Upload batch'),
+            )
+            .onPressed,
+        isNull,
+        reason: 'nothing to upload yet',
+      );
 
       await tester.tap(find.bySemanticsLabel('Take photo'));
       await tester.pumpAndSettle();
@@ -149,7 +171,55 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(camera.captureCount, 2);
-      expect(find.bySemanticsLabel('2 photos taken'), findsOneWidget);
+      expect(uploads.queue.draft!.photoCount, 2);
+      expect(find.bySemanticsLabel('2 photos in this batch'), findsOneWidget);
+      expect(find.text('Upload batch (2)'), findsOneWidget);
+    });
+
+    testWidgets(
+      'Upload batch queues the photos, shows Pending Uploads, and the camera '
+      'reopens on return',
+      (tester) async {
+        await pumpScreen(tester);
+        await tester.tap(find.bySemanticsLabel('Take photo'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Upload batch (1)'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(PendingUploadsScreen), findsOneWidget);
+        expect(find.text('Waiting to upload'), findsOneWidget);
+        expect(camera.isOpen, isFalse, reason: 'released while covered');
+
+        await tester.tap(find.text('Start new upload batch'));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(_previewKey), findsOneWidget);
+        expect(camera.openCount, 2);
+        expect(
+          find.text('Upload batch'),
+          findsOneWidget,
+          reason: 'a fresh batch',
+        );
+        expect(
+          find.bySemanticsLabel('Pending uploads, 1 batch waiting'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('a photo that cannot be queued is reported', (tester) async {
+      uploads.addFails = true;
+      await pumpScreen(tester);
+
+      await tester.tap(find.bySemanticsLabel('Take photo'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text("Couldn't take the photo. Please try again."),
+        findsOneWidget,
+      );
     });
 
     testWidgets('a failed capture is reported', (tester) async {
