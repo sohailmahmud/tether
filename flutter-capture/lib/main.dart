@@ -1,23 +1,17 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'app/app.dart';
 import 'app/app_bloc_observer.dart';
+import 'app/background_sync.dart';
 import 'app/plugin_camera_preview.dart';
-import 'data/datasources/mock_server_settings.dart';
-import 'data/datasources/mock_upload_api.dart';
-import 'data/datasources/network_status.dart';
-import 'data/datasources/photo_store.dart';
-import 'data/datasources/upload_queue_database.dart';
+import 'app/queue_change_channel.dart';
+import 'app/sync_dependencies.dart';
+import 'data/datasources/workmanager_sync_scheduler.dart';
 import 'data/repositories/plugin_camera_repository.dart';
-import 'data/repositories/sqflite_upload_queue_repository.dart';
-import 'domain/usecases/process_upload_queue.dart';
+import 'presentation/uploads/cubit/sync_cubit.dart';
 
 /// Composition root: creates the concrete dependencies and starts the app.
 Future<void> main() async {
@@ -26,33 +20,26 @@ Future<void> main() async {
   // Portrait only: the viewfinder layout and the tap-to-focus mapping assume it.
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  final documents = await getApplicationDocumentsDirectory();
-  final uploadQueue = SqfliteUploadQueueRepository(
-    database: await UploadQueueDatabase.open(
-      p.join(await getDatabasesPath(), UploadQueueDatabase.fileName),
-    ),
-    photos: PhotoStore(Directory(p.join(documents.path, 'photos'))),
-  );
-  final mockServerSettings = MockServerSettings(
-    File(p.join(documents.path, 'mock_server_mode.txt')),
-  );
-  final network = NetworkStatus();
-  final processUploadQueue = ProcessUploadQueue(
-    queue: uploadQueue,
-    // The assessment provides no API; see MockUploadApi.
-    api: MockUploadApi(
-      mode: mockServerSettings.read,
-      isOnline: network.isOnline,
-    ),
-  );
+  // The same engine setup the background worker builds in its own isolate.
+  final sync = await SyncDependencies.open();
+  // Uploads done by the background worker reach open screens through this.
+  QueueChangeChannel.listen(sync.uploadQueue.notifyExternalChange);
+  await Workmanager().initialize(backgroundSyncDispatcher);
+  final backgroundSync = WorkmanagerSyncScheduler();
   final camera = PluginCameraRepository();
 
   runApp(
     TetherCaptureApp(
       cameraRepository: camera,
-      uploadQueueRepository: uploadQueue,
-      processUploadQueue: processUploadQueue,
-      mockServerSettings: mockServerSettings,
+      uploadQueueRepository: sync.uploadQueue,
+      mockServerSettings: sync.mockServerSettings,
+      createSyncCubit: () => SyncCubit(
+        processQueue: sync.processUploadQueue,
+        queue: sync.uploadQueue,
+        backgroundSync: backgroundSync,
+        onlineChanges: sync.network.onlineChanges,
+        isOnline: sync.network.isOnline,
+      ),
       cameraPreviewBuilder: (_) => PluginCameraPreview(repository: camera),
     ),
   );

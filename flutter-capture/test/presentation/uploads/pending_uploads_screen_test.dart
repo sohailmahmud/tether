@@ -13,6 +13,7 @@ import 'package:tether_capture/presentation/uploads/cubit/sync_cubit.dart';
 import 'package:tether_capture/presentation/uploads/cubit/upload_queue_cubit.dart';
 import 'package:tether_capture/presentation/uploads/pending_uploads_screen.dart';
 
+import '../../helpers/fake_background_sync_scheduler.dart';
 import '../../helpers/fake_upload_api.dart';
 import '../../helpers/fake_upload_queue_repository.dart';
 
@@ -24,7 +25,13 @@ void main() {
     providers: [
       BlocProvider(create: (_) => UploadQueueCubit(uploads)),
       BlocProvider(
-        create: (_) => SyncCubit(ProcessUploadQueue(queue: uploads, api: api)),
+        create: (_) => SyncCubit(
+          processQueue: ProcessUploadQueue(queue: uploads, api: api),
+          queue: uploads,
+          backgroundSync: FakeBackgroundSyncScheduler(),
+          onlineChanges: const Stream.empty(),
+          isOnline: () async => true,
+        ),
       ),
       BlocProvider(
         create: (_) =>
@@ -144,6 +151,44 @@ void main() {
       reason: 'shown in the app bar',
     );
     expect(find.byType(BottomSheet), findsNothing);
+  });
+
+  testWidgets('offline, it says uploads will resume by themselves', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    uploads = FakeUploadQueueRepository();
+    await tester.pumpWidget(
+      MultiBlocProvider(
+        providers: [
+          BlocProvider(create: (_) => UploadQueueCubit(uploads)),
+          BlocProvider(
+            create: (_) {
+              final cubit = SyncCubit(
+                processQueue: ProcessUploadQueue(queue: uploads, api: api),
+                queue: uploads,
+                backgroundSync: FakeBackgroundSyncScheduler(),
+                onlineChanges: const Stream.empty(),
+                isOnline: () async => false,
+              );
+              unawaited(cubit.start());
+              return cubit;
+            },
+          ),
+          BlocProvider(
+            create: (_) => MockServerCubit(
+              MockServerSettings(File('/nonexistent/mode.txt')),
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: PendingUploadsScreen()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining("You're offline"), findsOneWidget);
   });
 
   testWidgets('Start new upload batch goes back to the camera', (tester) async {

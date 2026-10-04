@@ -52,6 +52,9 @@ abstract interface class UploadQueueRepository {
 
   /// When the earliest failed batch may be retried, or null if none is waiting.
   Future<DateTime?> nextRetryAt();
+
+  /// True while any submitted batch is not yet confirmed by the server.
+  Future<bool> hasUnfinishedUploads();
 }
 
 /// The queue could not be read or written (storage full, file missing…).

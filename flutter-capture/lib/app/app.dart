@@ -6,7 +6,6 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import '../data/datasources/mock_server_settings.dart';
 import '../domain/repositories/camera_repository.dart';
 import '../domain/repositories/upload_queue_repository.dart';
-import '../domain/usecases/process_upload_queue.dart';
 import '../presentation/camera/camera_preview_screen.dart';
 import '../presentation/camera/cubit/camera_cubit.dart';
 import '../presentation/uploads/cubit/mock_server_cubit.dart';
@@ -20,8 +19,8 @@ class TetherCaptureApp extends StatelessWidget {
     super.key,
     required this.cameraRepository,
     required this.uploadQueueRepository,
-    required this.processUploadQueue,
     required this.mockServerSettings,
+    required this.createSyncCubit,
     required this.cameraPreviewBuilder,
   });
 
@@ -29,8 +28,8 @@ class TetherCaptureApp extends StatelessWidget {
 
   final CameraRepository cameraRepository;
   final UploadQueueRepository uploadQueueRepository;
-  final ProcessUploadQueue processUploadQueue;
   final MockServerSettings mockServerSettings;
+  final SyncCubit Function() createSyncCubit;
   final WidgetBuilder cameraPreviewBuilder;
 
   @override
@@ -42,12 +41,13 @@ class TetherCaptureApp extends StatelessWidget {
           create: (_) => CameraCubit(cameraRepository, uploadQueueRepository),
         ),
         BlocProvider(create: (_) => UploadQueueCubit(uploadQueueRepository)),
-        // Not lazy: on launch, upload whatever is left from last time.
+        // Not lazy: starts watching connectivity and uploads anything left
+        // from last time as soon as the app launches.
         BlocProvider(
           lazy: false,
           create: (_) {
-            final cubit = SyncCubit(processUploadQueue);
-            unawaited(cubit.sync());
+            final cubit = createSyncCubit();
+            unawaited(cubit.start());
             return cubit;
           },
         ),

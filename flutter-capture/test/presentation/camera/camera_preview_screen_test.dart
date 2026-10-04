@@ -18,6 +18,7 @@ import 'package:tether_capture/presentation/uploads/cubit/sync_cubit.dart';
 import 'package:tether_capture/presentation/uploads/cubit/upload_queue_cubit.dart';
 import 'package:tether_capture/presentation/uploads/pending_uploads_screen.dart';
 
+import '../../helpers/fake_background_sync_scheduler.dart';
 import '../../helpers/fake_camera_repository.dart';
 import '../../helpers/fake_upload_api.dart';
 import '../../helpers/fake_upload_queue_repository.dart';
@@ -51,8 +52,13 @@ void main() {
           BlocProvider(create: (_) => cubit = CameraCubit(camera, uploads)),
           BlocProvider(create: (_) => UploadQueueCubit(uploads)),
           BlocProvider(
-            create: (_) =>
-                SyncCubit(ProcessUploadQueue(queue: uploads, api: api)),
+            create: (_) => SyncCubit(
+              processQueue: ProcessUploadQueue(queue: uploads, api: api),
+              queue: uploads,
+              backgroundSync: FakeBackgroundSyncScheduler(),
+              onlineChanges: const Stream.empty(),
+              isOnline: () async => true,
+            ),
           ),
           BlocProvider(
             create: (_) => MockServerCubit(

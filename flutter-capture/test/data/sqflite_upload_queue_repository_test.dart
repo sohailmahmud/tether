@@ -44,6 +44,12 @@ void main() {
 
   Future<UploadQueueSnapshot> current() => queue.watchQueue().first;
 
+  Future<void> pumpUntil(bool Function() condition) async {
+    for (var i = 0; i < 200 && !condition(); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
   setUp(() async {
     temp = await Directory.systemTemp.createTemp('upload_queue_test');
     photos = PhotoStore(Directory(p.join(temp.path, 'photos')));
@@ -344,6 +350,23 @@ void main() {
       expect(await queue.nextRetryAt(), now.add(const Duration(minutes: 1)));
     });
 
+    test('knows whether any submitted batch is still unfinished', () async {
+      expect(await queue.hasUnfinishedUploads(), isFalse);
+      await queue.addToDraft(await takePhoto());
+      expect(
+        await queue.hasUnfinishedUploads(),
+        isFalse,
+        reason: 'drafts do not count',
+      );
+
+      final id = (await queue.submitDraft())!.id;
+      expect(await queue.hasUnfinishedUploads(), isTrue);
+
+      await queue.claimNextDueBatch(now: now);
+      await queue.markCompleted(id);
+      expect(await queue.hasUnfinishedUploads(), isFalse);
+    });
+
     test('two workers claiming at once never get the same batch', () async {
       // Like the app and the background worker: two independent repositories
       // (no shared in-memory state or write queue) on the one connection
@@ -405,6 +428,61 @@ void main() {
       queue = await openQueue();
     },
   );
+
+  group('changes made by another isolate', () {
+    // The background worker has its own repository on the same database.
+    Future<SqfliteUploadQueueRepository> openWorkerQueue({
+      void Function()? onWrite,
+    }) async => SqfliteUploadQueueRepository(
+      database: await UploadQueueDatabase.open(
+        p.join(temp.path, UploadQueueDatabase.fileName),
+        factory: databaseFactoryFfi,
+      ),
+      photos: photos,
+      clock: () => now,
+      onWrite: onWrite,
+    );
+
+    test('reach open watchers once announced, not before', () async {
+      await queue.addToDraft(await takePhoto());
+      final id = (await queue.submitDraft())!.id;
+      final seen = <UploadStatus>[];
+      final subscription = queue.watchQueue().listen(
+        (s) => seen.add(s.batches.single.status),
+      );
+      addTearDown(subscription.cancel);
+      await pumpUntil(() => seen.isNotEmpty);
+
+      final worker = await openWorkerQueue();
+      await worker.claimNextDueBatch(now: now);
+      await worker.markCompleted(id);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        seen.last,
+        UploadStatus.pending,
+        reason: 'the bug: no notice, stale screen',
+      );
+
+      queue.notifyExternalChange();
+      await pumpUntil(() => seen.last == UploadStatus.completed);
+      expect(seen.last, UploadStatus.completed);
+    });
+
+    test('every write is reported, so the worker can announce it', () async {
+      var writes = 0;
+      final worker = await openWorkerQueue(onWrite: () => writes++);
+
+      await worker.addToDraft(await takePhoto());
+      final id = (await worker.submitDraft())!.id;
+      await worker.claimNextDueBatch(now: now);
+      await worker.markFailed(id, error: 'x', nextAttemptAt: now);
+      await worker.makeFailedDueNow(now: now);
+      await worker.claimNextDueBatch(now: now);
+      await worker.markCompleted(id);
+
+      expect(writes, 7);
+    });
+  });
 
   group('schema', () {
     late Database db;
