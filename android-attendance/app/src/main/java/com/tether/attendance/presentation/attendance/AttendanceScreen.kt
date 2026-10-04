@@ -26,21 +26,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.tether.attendance.R
+import com.tether.attendance.domain.model.AttendanceCheck
+import com.tether.attendance.domain.model.AttendanceRecord
+import com.tether.attendance.domain.model.AttendanceStatus
+import com.tether.attendance.domain.model.Eligibility
+import com.tether.attendance.domain.model.LocationData
 import com.tether.attendance.domain.model.OfficeLocation
 import com.tether.attendance.presentation.theme.TetherTheme
 
+/** Callbacks from [AttendanceScreen]; grouped so the screen's signature stays readable. */
+data class AttendanceActions(
+    val onSetOfficeLocation: () -> Unit = {},
+    val onMarkAttendance: () -> Unit = {},
+    val onAllowLocation: () -> Unit = {},
+    val onOpenAppSettings: () -> Unit = {},
+    val onOpenLocationSettings: () -> Unit = {},
+    val onDismissError: () -> Unit = {},
+)
+
 /**
  * Office setup and attendance on one screen, as the brief requires.
- * Stateless: renders [state] and reports user intent through callbacks.
+ * Stateless: renders [state] and reports user intent through [actions].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AttendanceScreen(
     state: AttendanceUiState,
-    onSetOfficeLocation: () -> Unit,
-    onOpenAppSettings: () -> Unit,
-    onOpenLocationSettings: () -> Unit,
-    onDismissError: () -> Unit,
+    actions: AttendanceActions,
     modifier: Modifier = Modifier,
 ) {
     var confirmReplace by rememberSaveable { mutableStateOf(false) }
@@ -75,8 +87,8 @@ fun AttendanceScreen(
             state.error?.let { error ->
                 ErrorBanner(
                     error = error,
-                    action = error.action(onOpenAppSettings, onOpenLocationSettings),
-                    onDismiss = onDismissError,
+                    action = error.action(actions),
+                    onDismiss = actions.onDismissError,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -86,23 +98,23 @@ fun AttendanceScreen(
                 isSettingOffice = state.isSettingOffice,
                 onSetOfficeLocation = {
                     // Replacing moves the geofence, so a stray tap must not do it silently.
-                    if (state.officeLocation !=
-                        null
-                    ) {
-                        confirmReplace = true
-                    } else {
-                        onSetOfficeLocation()
-                    }
+                    val hasOffice = state.officeLocation != null
+                    if (hasOffice) confirmReplace = true else actions.onSetOfficeLocation()
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
             DistanceIndicator(
-                isOfficeSet = state.officeLocation != null,
+                isOfficeLoaded = state.isOfficeLoaded,
+                status = state.status,
+                onAllowLocation = actions.onAllowLocation,
+                onTurnOnLocation = actions.onOpenLocationSettings,
                 modifier = Modifier.fillMaxWidth(),
             )
             MarkAttendanceSection(
-                enabled = false,
-                onMarkAttendance = {},
+                enabled = state.canMarkAttendance,
+                isMarking = state.isMarkingAttendance,
+                lastAttendance = state.lastAttendance,
+                onMarkAttendance = actions.onMarkAttendance,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -117,7 +129,7 @@ fun AttendanceScreen(
                 TextButton(
                     onClick = {
                         confirmReplace = false
-                        onSetOfficeLocation()
+                        actions.onSetOfficeLocation()
                     },
                 ) { Text(stringResource(R.string.replace_office_confirm)) }
             },
@@ -130,23 +142,31 @@ fun AttendanceScreen(
     }
 }
 
-private fun AttendanceError.action(
-    onOpenAppSettings: () -> Unit,
-    onOpenLocationSettings: () -> Unit,
-): ErrorAction? = when (this) {
+private fun AttendanceError.action(actions: AttendanceActions): ErrorAction? = when (this) {
     AttendanceError.PermissionPermanentlyDenied,
     AttendanceError.PreciseLocationDenied,
-    -> ErrorAction(R.string.action_open_settings, onOpenAppSettings)
+    -> ErrorAction(R.string.action_open_settings, actions.onOpenAppSettings)
     AttendanceError.LocationDisabled -> ErrorAction(
         R.string.action_turn_on_location,
-        onOpenLocationSettings,
+        actions.onOpenLocationSettings,
     )
-    // Retrying is the main button; no separate action needed.
+    // Retrying is the main buttons' job; no separate action needed.
     AttendanceError.PermissionDenied,
     AttendanceError.LocationUnavailable,
-    AttendanceError.SaveFailed,
+    AttendanceError.OfficeSaveFailed,
+    AttendanceError.NoLongerEligible,
+    AttendanceError.AttendanceSaveFailed,
     -> null
 }
+
+private val PreviewOffice = OfficeLocation(23.7808, 90.4071, 8f, 1_790_000_000_000)
+
+private fun previewMeasured(distance: Double, eligibility: Eligibility, accuracy: Float = 6f) =
+    AttendanceStatus.Measured(
+        office = PreviewOffice,
+        fix = LocationData(23.7809, 90.4072, accuracy, 0L, 0L),
+        check = AttendanceCheck(distance, eligibility),
+    )
 
 @Preview(showBackground = true, heightDp = 900)
 @Composable
@@ -154,29 +174,37 @@ private fun AttendanceScreenOfficeNotSetPreview() {
     TetherTheme {
         AttendanceScreen(
             state = AttendanceUiState(isOfficeLoaded = true),
-            onSetOfficeLocation = {},
-            onOpenAppSettings = {},
-            onOpenLocationSettings = {},
-            onDismissError = {},
+            actions = AttendanceActions(),
         )
     }
 }
 
 @Preview(showBackground = true, heightDp = 900)
 @Composable
-private fun AttendanceScreenOfficeSetPreview() {
+private fun AttendanceScreenOutOfRangePreview() {
+    TetherTheme {
+        AttendanceScreen(
+            state = AttendanceUiState(
+                isOfficeLoaded = true,
+                status = previewMeasured(120.0, Eligibility.OutOfRange),
+            ),
+            actions = AttendanceActions(),
+        )
+    }
+}
+
+@Preview(showBackground = true, heightDp = 900)
+@Composable
+private fun AttendanceScreenInRangePreview() {
     TetherTheme {
         AttendanceScreen(
             state =
             AttendanceUiState(
                 isOfficeLoaded = true,
-                officeLocation = OfficeLocation(23.7808, 90.4071, 8f, 1_790_000_000_000),
-                error = AttendanceError.LocationDisabled,
+                status = previewMeasured(12.0, Eligibility.Eligible),
+                lastAttendance = AttendanceRecord(1_790_000_000_000, 9.0, 5f),
             ),
-            onSetOfficeLocation = {},
-            onOpenAppSettings = {},
-            onOpenLocationSettings = {},
-            onDismissError = {},
+            actions = AttendanceActions(),
         )
     }
 }

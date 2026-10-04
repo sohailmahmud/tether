@@ -1,6 +1,7 @@
 package com.tether.attendance.domain.repository
 
 import com.tether.attendance.domain.model.LocationResult
+import kotlinx.coroutines.flow.Flow
 
 /** Access to the device's position. */
 interface LocationRepository {
@@ -15,4 +16,12 @@ interface LocationRepository {
      * (permission, location off, no fix); those come back as [LocationResult.Failure].
      */
     suspend fun getCurrentLocation(): LocationResult
+
+    /**
+     * Continuous high-accuracy fixes while collected; collection stopping
+     * stops the platform updates. Problems are emitted as
+     * [LocationResult.Failure] instead of ending the flow, so it resumes on its
+     * own when, for example, location is switched back on.
+     */
+    fun locationUpdates(): Flow<LocationResult>
 }

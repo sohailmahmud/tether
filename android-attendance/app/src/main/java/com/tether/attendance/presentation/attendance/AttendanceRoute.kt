@@ -1,6 +1,7 @@
 package com.tether.attendance.presentation.attendance
 
 import android.Manifest
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -29,29 +30,38 @@ private val LocationPermissions =
 fun AttendanceRoute(
     viewModel: AttendanceViewModel = viewModel(factory = AttendanceViewModel.Factory),
 ) {
+    // Collected only while the screen is at least STARTED, which is what stops
+    // location updates when the app goes to the background.
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val activity = LocalActivity.current
 
     // Requesting an already-granted permission returns at once without a dialog,
-    // so every tap goes through here and the screen never checks permission itself.
-    val permissionLauncher =
+    // so every location action goes through a request and the screen never checks
+    // permission itself. Two launchers, because the follow-up differs.
+    val setOfficePermission =
         rememberLauncherForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions(),
         ) { grants ->
-            if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
+            if (grants.isFineGranted()) {
                 viewModel.onSetOfficeLocation()
             } else {
                 viewModel.onLocationPermissionDenied(
-                    coarseGranted = grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true,
-                    // False after "don't ask again", when the system no longer shows the dialog.
-                    canAskAgain =
-                    activity?.let {
-                        ActivityCompat.shouldShowRequestPermissionRationale(
-                            it,
-                            Manifest.permission.ACCESS_FINE_LOCATION,
-                        )
-                    } ?: true,
+                    grants.isCoarseGranted(),
+                    activity.canAskAgain(),
+                )
+            }
+        }
+    val trackingPermission =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) { grants ->
+            if (grants.isFineGranted()) {
+                viewModel.onLocationPermissionGranted()
+            } else {
+                viewModel.onLocationPermissionDenied(
+                    grants.isCoarseGranted(),
+                    activity.canAskAgain(),
                 )
             }
         }
@@ -63,21 +73,40 @@ fun AttendanceRoute(
 
     AttendanceScreen(
         state = state,
-        onSetOfficeLocation = { permissionLauncher.launch(LocationPermissions) },
-        onOpenAppSettings = {
-            context.openSettings(
-                Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.fromParts("package", context.packageName, null),
-                ),
-            )
-        },
-        onOpenLocationSettings = {
-            context.openSettings(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-        },
-        onDismissError = viewModel::onErrorDismissed,
+        actions =
+        AttendanceActions(
+            onSetOfficeLocation = { setOfficePermission.launch(LocationPermissions) },
+            onMarkAttendance = viewModel::onMarkAttendance,
+            onAllowLocation = { trackingPermission.launch(LocationPermissions) },
+            onOpenAppSettings = {
+                context.openSettings(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null),
+                    ),
+                )
+            },
+            onOpenLocationSettings = {
+                context.openSettings(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            },
+            onDismissError = viewModel::onErrorDismissed,
+        ),
     )
 }
+
+private fun Map<String, Boolean>.isFineGranted() =
+    this[Manifest.permission.ACCESS_FINE_LOCATION] == true
+
+private fun Map<String, Boolean>.isCoarseGranted() =
+    this[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+/** False after "don't ask again", when the system no longer shows the dialog. */
+private fun Activity?.canAskAgain(): Boolean = this?.let {
+    ActivityCompat.shouldShowRequestPermissionRationale(
+        it,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    )
+} ?: true
 
 /** Opens a specific settings page, falling back to the main Settings app if a vendor build lacks it. */
 private fun Context.openSettings(intent: Intent) {

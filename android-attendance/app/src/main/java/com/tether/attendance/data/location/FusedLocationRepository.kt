@@ -6,19 +6,29 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationAvailability
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult as FusedLocationResult
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.tether.attendance.domain.model.LocationData
 import com.tether.attendance.domain.model.LocationError
 import com.tether.attendance.domain.model.LocationResult
 import com.tether.attendance.domain.repository.LocationRepository
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.tasks.await
 
 /** Gets the device position from Google Play services' fused location provider. */
@@ -72,11 +82,60 @@ class FusedLocationRepository(
             ?: LocationResult.Failure(LocationError.Unavailable)
     }
 
+    // MissingPermission: checked by hasLocationPermission() before requesting updates.
+    @SuppressLint("MissingPermission")
+    override fun locationUpdates(): Flow<LocationResult> = callbackFlow {
+        if (!hasLocationPermission()) {
+            // Stay open without updates; the ViewModel restarts tracking once permission is granted.
+            send(LocationResult.Failure(LocationError.PermissionDenied))
+            awaitClose()
+            return@callbackFlow
+        }
+        // Updates are requested even when location is off: the provider starts
+        // delivering by itself as soon as the user switches it back on.
+        if (!isLocationEnabled()) send(LocationResult.Failure(LocationError.LocationDisabled))
+
+        val callback =
+            object : LocationCallback() {
+                override fun onLocationResult(result: FusedLocationResult) {
+                    result.lastLocation?.let {
+                        trySend(LocationResult.Success(it.toLocationData()))
+                    }
+                }
+
+                override fun onLocationAvailability(availability: LocationAvailability) {
+                    // Indoors the provider reports brief "unavailable" gaps between good
+                    // fixes, so that alone is not treated as signal loss: the use case
+                    // detects it from fix age instead. Location being switched off is
+                    // reported straight away.
+                    if (!availability.isLocationAvailable && !isLocationEnabled()) {
+                        trySend(LocationResult.Failure(LocationError.LocationDisabled))
+                    }
+                }
+            }
+        val request =
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MILLIS)
+                .setMinUpdateIntervalMillis(MIN_UPDATE_INTERVAL_MILLIS)
+                .build()
+        try {
+            client.requestLocationUpdates(request, callback, Looper.getMainLooper()).await()
+        } catch (e: SecurityException) {
+            send(LocationResult.Failure(LocationError.PermissionDenied))
+        } catch (e: ApiException) {
+            Log.w(TAG, "Location updates request failed: status ${e.statusCode}")
+            send(LocationResult.Failure(LocationError.Unavailable))
+        }
+        awaitClose { client.removeLocationUpdates(callback) }
+    }
+        // Only the newest fix matters; a slow collector skips older ones.
+        .conflate()
+
     private fun Location.toLocationData() = LocationData(
         latitude = latitude,
         longitude = longitude,
         accuracyMeters = if (hasAccuracy()) accuracy else null,
         timestampMillis = time,
+        elapsedRealtimeMillis = TimeUnit.NANOSECONDS.toMillis(elapsedRealtimeNanos),
     )
 
     private companion object {
@@ -84,5 +143,9 @@ class FusedLocationRepository(
 
         /** Long enough for a cold GPS start outdoors; short enough that the user isn't left waiting. */
         const val FIX_TIMEOUT_MILLIS = 30_000L
+
+        /** Fast enough for the distance to feel live while walking; only runs while the screen is visible. */
+        const val UPDATE_INTERVAL_MILLIS = 2_000L
+        const val MIN_UPDATE_INTERVAL_MILLIS = 1_000L
     }
 }
