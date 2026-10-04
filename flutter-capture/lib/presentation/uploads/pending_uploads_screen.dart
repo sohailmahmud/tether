@@ -44,10 +44,13 @@ class PendingUploadsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Pending Uploads'),
         actions: [
-          TextButton.icon(
-            onPressed: () => unawaited(_chooseMockServer(context)),
-            icon: const Icon(Icons.dns_outlined),
-            label: Text(MockServerSheet.label(mockMode)),
+          Tooltip(
+            message: 'Mock server: ${MockServerSheet.label(mockMode)}',
+            child: TextButton.icon(
+              onPressed: () => unawaited(_chooseMockServer(context)),
+              icon: const Icon(Icons.dns_outlined),
+              label: Text(MockServerSheet.shortLabel(mockMode)),
+            ),
           ),
         ],
         bottom: PreferredSize(

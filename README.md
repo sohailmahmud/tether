@@ -63,7 +63,7 @@ One function, `AttendancePolicy.evaluate()`, decides eligibility. The screen and
 |---|---|---|
 | Geofence radius | 50 m, inclusive | Assessment brief |
 | Distance | Haversine on a spherical Earth; under 0.3 m error at 50 m | Implementation choice |
-| Minimum accuracy | Fix must be ±50 m or better | **My decision.** The brief asks for "high accuracy" without a number; a fix less certain than the geofence can't tell inside from outside |
+| Minimum accuracy | Fix must be ±50 m or better, both to check in and to set the office | **My decision.** The brief asks for "high accuracy" without a number. A fix less certain than the geofence can't tell inside from outside, and an office saved from one would shift the whole geofence |
 | Maximum fix age | 15 s; older fixes show "No GPS signal" and are refused at check-in | **My decision.** Updates arrive every 2 s, so 15 s without one means the signal is lost |
 
 Distances on screen are rounded **up** to whole metres, so the label always agrees with the rule: 50.0 m shows "50m" and is in range, while 50.2 m shows "51m" and is out. On the test phone, an office placed 50 m away switched between "50 m, In range" and "51 m, Out of range" as GPS jitter crossed the line.
@@ -120,7 +120,9 @@ The schema itself enforces integrity: foreign keys from photos to their batch (e
 
 **Batch flow:** photos go into the open *draft* batch as they are taken. **Upload batch** turns the draft into a *pending* batch, and the next photo starts a new draft, so any number of batches can wait in the queue. Statuses are `draft → pending → uploading → failed / completed`. The master plan's four upload statuses are extended with `draft`, the batch still being captured, which is never uploaded.
 
-**Photo files:** the camera writes to the cache directory, which Android may clear at any time, so each photo is moved (an atomic rename) into app storage under `photos/<batch>/<photo>.jpg`. The database stores paths relative to that folder. If the record can't be written, the moved file is deleted, so no unreferenced file is left behind.
+**Photo files:** the camera writes to the cache directory, which Android may clear at any time, so each photo is moved (an atomic rename) into app storage under `photos/<batch>/<photo>.jpg`. The database stores paths relative to that folder. If the record can't be written, the moved file is deleted. If the app is killed at an unlucky moment (after a photo is moved in but before it is recorded, or after an upload is completed but before its files are deleted), the leftover files are removed at the next launch. Only the app's isolate does this cleanup, because it is the only one that adds photos.
+
+Backup and device-to-device transfer are disabled here too: queued photos are work records that belong to this device until uploaded, and a queue restored on another device would no longer match the server.
 
 **Why SQLite rather than Hive:** the queue needs transactions, so that batch and photo statuses change together and a batch can be claimed for upload exactly once. It also needs safe access from a background isolate (the sync worker). SQLite provides both. Hive has no transactions and doesn't support multiple isolates.
 
@@ -135,12 +137,12 @@ Repository tests run real SQL through `sqflite_common_ffi`, including closing an
 3. **Upload** through `UploadApi.uploadBatch`, with the batch id as an idempotency key.
 4. **Record the outcome:**
    - **Success:** the batch and its photos become *completed*. The photo files are deleted only after that is committed.
-   - **Failure:** the batch becomes *failed*. Photos and records stay, the attempt is counted, the error is kept for display, and the next attempt is scheduled with exponential backoff (30 s, doubling, capped at 15 min).
+   - **Failure:** the batch becomes *failed*. Photos and records stay, the attempt is counted, the error is kept for display, and the next attempt is scheduled with exponential backoff (30 s, doubling, capped at 15 min). A failure is recorded only while the batch is still *uploading*: an attempt that outlived its lease can't mark a batch that another run has since completed as failed.
    - **No connection:** the run stops, since every other batch would fail the same way.
 
 Required invariant, covered by tests and checked on the test phone: **failed upload → images remain → queue records remain → retry possible.**
 
-Overlapping triggers share one run. A batch submitted mid-run is picked up before the run ends. An unexpected API exception still counts as a failed attempt, so a batch is never left stuck.
+Overlapping triggers share one run. A batch submitted mid-run is picked up before the run ends. An unexpected API exception still counts as a failed attempt, so a batch is never left stuck. An unexpected storage error ends the run without changing the queue; the next run waits at least 30 s, so a lasting fault such as a full disk can't spin in a loop.
 
 **When uploads start, with no user action needed:**
 
@@ -162,6 +164,7 @@ Checked on the test phone:
 - **App closed:** a batch failed (mock server error), the mock was switched back to normal, and the app was sent to the background and its process killed. About a minute later Android started the process for WorkManager's job service, not an activity, and the worker uploaded the batch. The app's screen was only opened about 15 s after the upload had finished.
 - **Retry with backoff:** WorkManager's log shows the worker returning `RETRY` while the server failed, then running again 30 s later and returning `SUCCESS`. The job is registered with a *CONNECTIVITY* constraint and exponential backoff from 30 s.
 - **Offline, then online:** with airplane mode on, a batch failed with "No internet connection". When airplane mode was turned off it was uploaded about 11 s later (reconnect, 3 s stable connection, upload) with the app open.
+- **Release build:** the app-closed scenario was repeated with the release APK (AOT-compiled, R8-shrunk). The worker returned `RETRY` while the server failed, and the app was killed 8 s later. When the 30 s backoff ended, Android started the process for the job service, and the worker returned `SUCCESS` a second later.
 
 **Storage:** schema version 2 adds `next_attempt_at`. Existing installs are upgraded in place; this was checked on the test phone, whose queue was kept through the upgrade.
 
@@ -185,6 +188,7 @@ Failures of a user action appear as a banner. Where the user can fix the cause, 
 | Only approximate location granted | Precise location is required for a 50 m check, with **Open settings** |
 | Location services off | **Turn on**, which opens location settings |
 | No fix within 30 s when setting the office | Advice to retry with a clearer view of the sky |
+| The fix for the office is worse than ±50 m | Not saved; advice to move near a window or outdoors |
 | User moved, or fix went stale, between render and tap | Check-in refused; check the distance and retry |
 | Storage write fails | Retry message; previous data is kept |
 
@@ -209,6 +213,7 @@ The app requests only the camera permission it needs. The camera plugin's microp
 | A photo can't be saved to the queue (e.g. storage full) | The same "couldn't take the photo" snackbar; nothing half-saved is left behind |
 | Upload batch fails to write | A snackbar; the photos stay in the batch being captured |
 | The queue can't be read | Pending Uploads says so |
+| Storage can't be opened at launch (e.g. the device is full) | A "Can't open storage" screen saying what to do, instead of a blank app |
 
 **Tether Capture**, uploads:
 
@@ -217,6 +222,7 @@ The app requests only the camera permission it needs. The camera plugin's microp
 | Offline | A banner on Pending Uploads: uploads resume automatically when the connection returns |
 | Upload fails (no internet, timeout, server error) | The batch shows "Failed once" (or "Failed N×"), the error, and when it is due again. Photos stay on the device, and **Retry now** is offered |
 | Upload interrupted by the app closing | The batch returns to "Waiting to upload" with a note, and is retried |
+| Unexpected storage error during a run | Nothing in the queue changes; the run is tried again 30 s later |
 | Upload succeeds | "Uploaded", and the photos are removed from the device |
 
 ## Mock API
@@ -224,7 +230,7 @@ The app requests only the camera permission it needs. The camera plugin's microp
 The assessment provides no backend, so `MockUploadApi` implements `UploadApi`. It is a data-layer class; the UI only chooses its mode.
 
 - **Real connectivity:** if the device has no network (e.g. airplane mode), every upload fails with "No internet connection", whatever the mode.
-- **Modes**, chosen from **Mock server** on Pending Uploads and saved to a file so a background worker would use the same mode:
+- **Modes**, chosen from **Mock server** on Pending Uploads and saved to a file, so the background worker uses the same mode:
 
 | Mode | Behaviour |
 |---|---|
@@ -312,8 +318,9 @@ _To be added._
 - There is no front-camera switch or flash control; the brief asks for back-camera zoom and focus only.
 - On Android the zoom shortcuts reflect what the main back camera exposes through its zoom range. Phones that show an ultra-wide lens only as a separate camera, not through zoom below 1x, get no 0.5x button.
 - Individual photos can't be removed from a batch before upload.
-- If the app is killed between moving a photo into storage and recording it (a few milliseconds), that file is left unreferenced. It is never uploaded, and only uses storage.
 - "Online" means the device has a network connection. A captive Wi-Fi portal counts as online, so uploads fail and back off until the network really works.
 - Android may delay background work (Doze, battery saver, and some vendors' battery managers). The in-app triggers cover the time the app is open.
+- While the app is closed, retries follow WorkManager's backoff, which keeps doubling up to WorkManager's 5-hour cap if the server keeps failing. With the app open, retries are capped at 15 minutes.
+- The mock server remembers stored batches in memory, separately in the app and the worker, and forgets them on restart. A real server would keep that record, so a batch re-sent after a crash would get its original receipt.
 - There is no upload percentage; a batch shows as uploading until it finishes.
 - Uploaded batches stay listed (without their photos) until the app's data is cleared.

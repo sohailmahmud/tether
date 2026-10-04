@@ -49,6 +49,28 @@ class PhotoStore {
     }
   }
 
+  /// The ids of the batches that have a photo folder.
+  Future<List<String>> batchIds() async {
+    if (!root.existsSync()) return const [];
+    return [
+      await for (final entry in root.list())
+        if (entry is Directory) p.basename(entry.path),
+    ];
+  }
+
+  /// The photos kept for [batchId], as paths relative to [root].
+  Future<List<String>> photosOf(String batchId) async {
+    try {
+      return [
+        await for (final entry in Directory(p.join(root.path, batchId)).list())
+          if (entry is File) p.relative(entry.path, from: root.path),
+      ];
+    } on PathNotFoundException {
+      // Deleted in the meantime, e.g. its upload just completed.
+      return const [];
+    }
+  }
+
   /// Deletes every kept photo of [batchId]. Missing folders are ignored.
   Future<void> deleteBatch(String batchId) async {
     try {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Tether Attendance</string>
     <string name="attendance_title">Attendance</string>
 
@@ -38,7 +38,8 @@
     <string name="range_in_range">In range</string>
     <string name="range_hint_in_range">You are %1$s from the office. You can mark attendance now.</string>
     <string name="range_out_of_range">Out of range</string>
-    <string name="range_hint_out_of_range">You are %1$s away from the office. Move within %2$d meters of the designated office location to enable check-in.</string>
+    <!-- %2$d is always the 50 m radius, so no plural form is needed. -->
+    <string name="range_hint_out_of_range" tools:ignore="PluralsCandidate">You are %1$s away from the office. Move within %2$d meters of the designated office location to enable check-in.</string>
     <string name="range_weak_signal">Weak GPS signal</string>
     <string name="range_hint_weak_signal">Your location is only accurate to ±%1$d m. Check-in needs ±%2$d m or better; moving near a window or outdoors helps.</string>
     <string name="range_hint_accuracy_unknown">Your location\'s accuracy is unknown, so check-in stays locked until a more precise fix arrives.</string>
@@ -59,6 +60,7 @@
     <string name="error_precise_location_denied">Precise location is needed. Approximate location can be off by more than the 50 m check-in radius.</string>
     <string name="error_location_disabled">Location is turned off on this device.</string>
     <string name="error_location_unavailable">Couldn\'t get a location fix. Move somewhere with a clearer view of the sky and try again.</string>
+    <string name="error_office_low_accuracy">Your location isn\'t precise enough to save as the office. It needs to be accurate to ±50 m or better; moving near a window or outdoors helps.</string>
     <string name="error_office_save_failed">The office location couldn\'t be saved. Please try again.</string>
     <string name="error_no_longer_eligible">Your location changed before attendance was marked. Check your distance and try again.</string>
     <string name="error_attendance_save_failed">Attendance couldn\'t be saved. Please try again.</string>

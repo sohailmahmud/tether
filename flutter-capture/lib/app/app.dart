@@ -26,6 +26,15 @@ class TetherCaptureApp extends StatelessWidget {
 
   static const title = 'Tether Capture';
 
+  /// Dark, so the screen around the viewfinder doesn't glare.
+  static ThemeData theme() => ThemeData(
+    useMaterial3: true,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF2563EB),
+      brightness: Brightness.dark,
+    ),
+  );
+
   final CameraRepository cameraRepository;
   final UploadQueueRepository uploadQueueRepository;
   final MockServerSettings mockServerSettings;
@@ -62,13 +71,7 @@ class TetherCaptureApp extends StatelessWidget {
       child: MaterialApp(
         title: title,
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF2563EB),
-            brightness: Brightness.dark,
-          ),
-        ),
+        theme: theme(),
         home: CameraPreviewScreen(previewBuilder: cameraPreviewBuilder),
       ),
     );

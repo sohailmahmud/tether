@@ -15,10 +15,18 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         tools:node="remove" />
 
+    <!-- Backup and device transfer are off: queued photos are work records
+         that belong to this device until uploaded, and a queue restored on
+         another device would show batches whose state no longer matches the
+         server. allowBackup and fullBackupContent cover API 24-30;
+         dataExtractionRules covers Android 12+. -->
     <application
         android:label="Tether Capture"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"

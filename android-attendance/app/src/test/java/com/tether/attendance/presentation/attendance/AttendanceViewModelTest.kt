@@ -200,6 +200,21 @@ class AttendanceViewModelTest {
     }
 
     @Test
+    fun `an imprecise fix is not saved as the office, and the error says why`() = runTest {
+        office.stored.value = SampleOffice
+        location.result = LocationResult.Success(SampleFix.copy(accuracyMeters = 120f))
+        val viewModel = createViewModel()
+        subscribe(viewModel)
+
+        viewModel.onSetOfficeLocation()
+        runCurrent()
+
+        assertEquals(AttendanceError.OfficeLowAccuracy, viewModel.uiState.value.error)
+        assertFalse(viewModel.uiState.value.isSettingOffice)
+        assertEquals(SampleOffice, viewModel.uiState.value.officeLocation)
+    }
+
+    @Test
     fun `a second Set tap while a fix is in progress starts no second request`() = runTest {
         val gate = CompletableDeferred<Unit>()
         location.gate = gate

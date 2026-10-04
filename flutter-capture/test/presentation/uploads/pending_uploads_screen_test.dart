@@ -153,6 +153,24 @@ void main() {
     expect(find.byType(BottomSheet), findsNothing);
   });
 
+  testWidgets('the app bar names the mode briefly, so the title has room', (
+    tester,
+  ) async {
+    await pumpScreen(tester, const UploadQueueSnapshot());
+
+    await tester.tap(find.byIcon(Icons.dns_outlined));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Slow connection'));
+    await tester.pumpAndSettle();
+
+    final appBar = find.byType(AppBar);
+    expect(
+      find.descendant(of: appBar, matching: find.text('Slow')),
+      findsOneWidget,
+    );
+    expect(find.byTooltip('Mock server: Slow connection'), findsOneWidget);
+  });
+
   testWidgets('offline, it says uploads will resume by themselves', (
     tester,
   ) async {

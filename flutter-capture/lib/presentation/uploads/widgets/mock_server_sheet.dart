@@ -20,6 +20,14 @@ class MockServerSheet extends StatelessWidget {
     MockServerMode.unstable => 'Unstable connection',
   };
 
+  /// For the app bar, where a long name would squeeze the screen title.
+  static String shortLabel(MockServerMode mode) => switch (mode) {
+    MockServerMode.normal => 'Normal',
+    MockServerMode.slowConnection => 'Slow',
+    MockServerMode.serverError => 'Server error',
+    MockServerMode.unstable => 'Unstable',
+  };
+
   static String _description(MockServerMode mode) => switch (mode) {
     MockServerMode.normal => 'Uploads succeed after a realistic transfer time.',
     MockServerMode.slowConnection =>

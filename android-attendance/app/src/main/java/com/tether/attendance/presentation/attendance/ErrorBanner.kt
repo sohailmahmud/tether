@@ -87,6 +87,7 @@ private val AttendanceError.messageRes: Int
             AttendanceError.PreciseLocationDenied -> R.string.error_precise_location_denied
             AttendanceError.LocationDisabled -> R.string.error_location_disabled
             AttendanceError.LocationUnavailable -> R.string.error_location_unavailable
+            AttendanceError.OfficeLowAccuracy -> R.string.error_office_low_accuracy
             AttendanceError.OfficeSaveFailed -> R.string.error_office_save_failed
             AttendanceError.NoLongerEligible -> R.string.error_no_longer_eligible
             AttendanceError.AttendanceSaveFailed -> R.string.error_attendance_save_failed

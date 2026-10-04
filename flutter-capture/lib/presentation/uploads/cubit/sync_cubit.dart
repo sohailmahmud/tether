@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../domain/entities/retry_policy.dart';
 import '../../../domain/repositories/background_sync_scheduler.dart';
 import '../../../domain/repositories/upload_queue_repository.dart';
 import '../../../domain/usecases/process_upload_queue.dart';
@@ -67,6 +68,10 @@ class SyncCubit extends Cubit<SyncState> {
   /// flapping network doesn't set off a burst of failing attempts.
   static const stableConnectionDelay = Duration(seconds: 3);
 
+  /// After an unexpected storage error, the next run waits at least this
+  /// long, so a lasting fault (e.g. a full disk) can't spin in a busy loop.
+  static const errorRetryDelay = RetryPolicy.firstDelay;
+
   final ProcessUploadQueue _processQueue;
   final UploadQueueRepository _queue;
   final BackgroundSyncScheduler _backgroundSync;
@@ -92,10 +97,12 @@ class SyncCubit extends Cubit<SyncState> {
     _retryTimer?.cancel();
     _emit(state.copyWith(isSyncing: true, lastRunFailed: false));
     await _handOverToBackground();
+    var runFailed = false;
     try {
       final summary = await _processQueue(retryFailedNow: retryFailedNow);
       _emit(state.copyWith(isSyncing: false, lastRun: summary));
     } on Object catch (error, stack) {
+      runFailed = true;
       developer.log(
         'Upload run failed',
         name: 'Sync',
@@ -104,7 +111,7 @@ class SyncCubit extends Cubit<SyncState> {
       );
       _emit(state.copyWith(isSyncing: false, lastRunFailed: true));
     }
-    await _scheduleNextRetry();
+    await _scheduleNextRetry(afterError: runFailed);
   }
 
   void _onConnectivityChanged(bool online) {
@@ -141,14 +148,20 @@ class SyncCubit extends Cubit<SyncState> {
     }
   }
 
-  /// Runs again when the earliest failed batch is due, if online.
-  Future<void> _scheduleNextRetry() async {
+  /// Runs again when the earliest failed batch is due, if online. After a
+  /// storage error, runs again in [errorRetryDelay] at the earliest, and
+  /// even if no failed batch is waiting, since the error may have hidden one.
+  Future<void> _scheduleNextRetry({required bool afterError}) async {
     if (isClosed || !state.isOnline) return;
-    final DateTime? next;
+    DateTime? next;
     try {
       next = await _queue.nextRetryAt();
     } on Object {
-      return;
+      if (!afterError) return;
+    }
+    if (afterError) {
+      final earliest = _clock().add(errorRetryDelay);
+      if (next == null || next.isBefore(earliest)) next = earliest;
     }
     _retryTimer?.cancel();
     if (next == null || isClosed) return;

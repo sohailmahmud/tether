@@ -43,6 +43,10 @@ enum class AttendanceError {
 
     LocationDisabled,
     LocationUnavailable,
+
+    /** The fix for Set Office Location was too imprecise to save as the office. */
+    OfficeLowAccuracy,
+
     OfficeSaveFailed,
 
     /** Between the screen rendering and the tap, the user moved or the fix went stale. */

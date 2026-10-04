@@ -255,24 +255,31 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     required DateTime nextAttemptAt,
   }) => _write(() async {
     final now = _clock().millisecondsSinceEpoch;
-    await _db.transaction((txn) async {
-      await txn.rawUpdate(
+    final updated = await _db.transaction((txn) async {
+      // Only an upload still in progress can fail. If this attempt outlived
+      // its lease and another run has since completed the batch (and deleted
+      // its files), the late failure must not bring it back.
+      final batches = await txn.rawUpdate(
         'UPDATE $_batches SET status = ?, retry_count = retry_count + 1, '
-        'last_error = ?, next_attempt_at = ?, updated_at = ? WHERE id = ?',
+        'last_error = ?, next_attempt_at = ?, updated_at = ? '
+        'WHERE id = ? AND status = ?',
         [
           UploadStatus.failed.name,
           error,
           nextAttemptAt.millisecondsSinceEpoch,
           now,
           batchId,
+          UploadStatus.uploading.name,
         ],
       );
+      if (batches == 0) return false;
       await txn.rawUpdate(
         'UPDATE $_items SET status = ?, retry_count = retry_count + 1 WHERE batch_id = ?',
         [UploadStatus.failed.name, batchId],
       );
+      return true;
     });
-    _notifyWrite();
+    if (updated) _notifyWrite();
   });
 
   @override
@@ -338,6 +345,46 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     );
     return rows.isNotEmpty;
   }
+
+  /// Deletes photo files that no queued photo points to, and returns how many
+  /// folders and files were removed. They are left behind only if the app is
+  /// killed at the wrong moment: after an upload is completed but before its
+  /// files are deleted, or after a photo is moved into the queue but before
+  /// it is recorded.
+  ///
+  /// Only for the app's isolate, the one that adds photos: its own additions
+  /// are serialized with this, while one in another isolate could be caught
+  /// half-done.
+  Future<int> deleteOrphanedPhotos() => _write(() async {
+    final rows = await _db.rawQuery(
+      'SELECT b.id, b.status, i.file_path FROM $_batches b '
+      'LEFT JOIN $_items i ON i.batch_id = b.id',
+    );
+    final liveBatches = <String>{};
+    final keptPhotos = <String>{};
+    for (final row in rows) {
+      if (row['status'] == UploadStatus.completed.name) continue;
+      liveBatches.add(row['id']! as String);
+      final path = row['file_path'] as String?;
+      if (path != null) keptPhotos.add(path);
+    }
+
+    var removed = 0;
+    for (final batchId in await _photos.batchIds()) {
+      if (!liveBatches.contains(batchId)) {
+        await _photos.deleteBatch(batchId);
+        removed++;
+        continue;
+      }
+      for (final photo in await _photos.photosOf(batchId)) {
+        if (!keptPhotos.contains(photo)) {
+          await _photos.delete(photo);
+          removed++;
+        }
+      }
+    }
+    return removed;
+  });
 
   /// Another isolate (the background worker) changed the queue: reload every
   /// open watcher from the database.

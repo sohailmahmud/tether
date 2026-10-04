@@ -1,5 +1,6 @@
 package com.tether.attendance.domain.usecase
 
+import com.tether.attendance.domain.model.AttendancePolicy
 import com.tether.attendance.domain.model.LocationError
 import com.tether.attendance.domain.model.LocationResult
 import com.tether.attendance.domain.model.OfficeLocation
@@ -12,6 +13,7 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SetOfficeLocationUseCaseTest {
@@ -44,6 +46,32 @@ class SetOfficeLocationUseCaseTest {
 
         assertEquals(SetOfficeLocationResult.LocationFailed(LocationError.LocationDisabled), result)
         assertNull(office.stored.value)
+    }
+
+    @Test
+    fun `a fix less precise than the check-in rule is not saved`() = runTest {
+        location.result = LocationResult.Success(SampleFix.copy(accuracyMeters = 65f))
+
+        assertEquals(SetOfficeLocationResult.LowAccuracy(65f), setOfficeLocation())
+        assertNull(office.stored.value)
+    }
+
+    @Test
+    fun `a fix of unknown accuracy is not saved`() = runTest {
+        location.result = LocationResult.Success(SampleFix.copy(accuracyMeters = null))
+
+        assertEquals(SetOfficeLocationResult.LowAccuracy(null), setOfficeLocation())
+        assertNull(office.stored.value)
+    }
+
+    @Test
+    fun `a fix exactly at the accuracy limit is saved`() = runTest {
+        location.result =
+            LocationResult.Success(
+                SampleFix.copy(accuracyMeters = AttendancePolicy.MAX_ACCURACY_METERS),
+            )
+
+        assertTrue(setOfficeLocation() is SetOfficeLocationResult.Saved)
     }
 
     @Test
