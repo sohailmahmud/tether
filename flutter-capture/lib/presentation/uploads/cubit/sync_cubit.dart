@@ -1,17 +1,23 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../../../domain/repositories/background_sync_scheduler.dart';
+import '../../../domain/repositories/upload_queue_repository.dart';
 import '../../../domain/usecases/process_upload_queue.dart';
 
 final class SyncState extends Equatable {
   const SyncState({
+    this.isOnline = true,
     this.isSyncing = false,
     this.lastRun,
     this.lastRunFailed = false,
   });
 
+  /// Whether the device has a network connection.
+  final bool isOnline;
   final bool isSyncing;
 
   /// What the most recent run did; null before the first run finishes.
@@ -21,25 +27,74 @@ final class SyncState extends Equatable {
   /// and the next trigger tries again.
   final bool lastRunFailed;
 
+  SyncState copyWith({
+    bool? isOnline,
+    bool? isSyncing,
+    UploadRunSummary? lastRun,
+    bool? lastRunFailed,
+  }) => SyncState(
+    isOnline: isOnline ?? this.isOnline,
+    isSyncing: isSyncing ?? this.isSyncing,
+    lastRun: lastRun ?? this.lastRun,
+    lastRunFailed: lastRunFailed ?? this.lastRunFailed,
+  );
+
   @override
-  List<Object?> get props => [isSyncing, lastRun, lastRunFailed];
+  List<Object?> get props => [isOnline, isSyncing, lastRun, lastRunFailed];
 }
 
-/// Runs the upload engine when something should trigger an upload: the app
-/// starting, a batch being submitted, or the user tapping "Retry now".
-/// Upload progress per batch comes from the queue itself.
+/// Decides when the upload engine runs while the app is open, and hands
+/// over to the background worker for when it isn't.
+///
+/// Automatic triggers, no user action needed:
+/// - the app starting;
+/// - the connection returning and staying up for [stableConnectionDelay]
+///   (failed batches are retried at once, skipping their backoff);
+/// - the next retry time of a failed batch arriving.
+///
+/// Manual: "Upload batch" and "Retry now".
 class SyncCubit extends Cubit<SyncState> {
-  SyncCubit(this._processQueue) : super(const SyncState());
+  SyncCubit({
+    required this._processQueue,
+    required this._queue,
+    required this._backgroundSync,
+    required this._onlineChanges,
+    required this._isOnline,
+    this._clock = DateTime.now,
+  }) : super(const SyncState());
+
+  /// How long a connection must stay up before uploads resume, so a
+  /// flapping network doesn't set off a burst of failing attempts.
+  static const stableConnectionDelay = Duration(seconds: 3);
 
   final ProcessUploadQueue _processQueue;
+  final UploadQueueRepository _queue;
+  final BackgroundSyncScheduler _backgroundSync;
+  final Stream<bool> _onlineChanges;
+  final Future<bool> Function() _isOnline;
+  final DateTime Function() _clock;
+
+  StreamSubscription<bool>? _connectivity;
+  Timer? _stableConnectionTimer;
+  Timer? _retryTimer;
+
+  /// Called once when the app starts: watches connectivity and uploads
+  /// whatever is left from last time.
+  Future<void> start() async {
+    _connectivity = _onlineChanges.listen(_onConnectivityChanged);
+    _emit(state.copyWith(isOnline: await _isOnline()));
+    await sync();
+  }
 
   /// Uploads everything due. [retryFailedNow] skips the backoff wait of
   /// failed batches. Overlapping calls share one engine run.
   Future<void> sync({bool retryFailedNow = false}) async {
-    _emit(SyncState(isSyncing: true, lastRun: state.lastRun));
+    _retryTimer?.cancel();
+    _emit(state.copyWith(isSyncing: true, lastRunFailed: false));
+    await _handOverToBackground();
     try {
       final summary = await _processQueue(retryFailedNow: retryFailedNow);
-      _emit(SyncState(lastRun: summary));
+      _emit(state.copyWith(isSyncing: false, lastRun: summary));
     } on Object catch (error, stack) {
       developer.log(
         'Upload run failed',
@@ -47,8 +102,69 @@ class SyncCubit extends Cubit<SyncState> {
         error: error,
         stackTrace: stack,
       );
-      _emit(SyncState(lastRun: state.lastRun, lastRunFailed: true));
+      _emit(state.copyWith(isSyncing: false, lastRunFailed: true));
     }
+    await _scheduleNextRetry();
+  }
+
+  void _onConnectivityChanged(bool online) {
+    final wasOnline = state.isOnline;
+    _emit(state.copyWith(isOnline: online));
+    _stableConnectionTimer?.cancel();
+    if (online && !wasOnline) {
+      _stableConnectionTimer = Timer(
+        stableConnectionDelay,
+        () => unawaited(sync(retryFailedNow: true)),
+      );
+    } else if (!online) {
+      // Nothing can upload while offline; reconnecting triggers the retry.
+      _retryTimer?.cancel();
+    }
+  }
+
+  /// While anything is unfinished, keep a background run scheduled, so
+  /// uploads finish even if the app is closed first. The task is unique, so
+  /// scheduling again is cheap.
+  Future<void> _handOverToBackground() async {
+    try {
+      if (await _queue.hasUnfinishedUploads()) {
+        await _backgroundSync.scheduleUpload();
+      }
+    } on Object catch (error, stack) {
+      // The foreground run still goes ahead; the next run schedules again.
+      developer.log(
+        'Background sync not scheduled',
+        name: 'Sync',
+        error: error,
+        stackTrace: stack,
+      );
+    }
+  }
+
+  /// Runs again when the earliest failed batch is due, if online.
+  Future<void> _scheduleNextRetry() async {
+    if (isClosed || !state.isOnline) return;
+    final DateTime? next;
+    try {
+      next = await _queue.nextRetryAt();
+    } on Object {
+      return;
+    }
+    _retryTimer?.cancel();
+    if (next == null || isClosed) return;
+    final wait = next.difference(_clock());
+    _retryTimer = Timer(
+      wait.isNegative ? Duration.zero : wait,
+      () => unawaited(sync()),
+    );
+  }
+
+  @override
+  Future<void> close() async {
+    _stableConnectionTimer?.cancel();
+    _retryTimer?.cancel();
+    await _connectivity?.cancel();
+    return super.close();
   }
 
   void _emit(SyncState next) {

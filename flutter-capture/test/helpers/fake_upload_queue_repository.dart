@@ -202,6 +202,10 @@ class FakeUploadQueueRepository implements UploadQueueRepository {
   }
 
   @override
+  Future<bool> hasUnfinishedUploads() async =>
+      _queue.batches.any((b) => b.status != UploadStatus.completed);
+
+  @override
   Future<DateTime?> nextRetryAt() async {
     final times =
         _queue.batches

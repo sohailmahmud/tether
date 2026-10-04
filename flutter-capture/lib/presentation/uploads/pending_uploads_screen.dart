@@ -38,6 +38,7 @@ class PendingUploadsScreen extends StatelessWidget {
     final isSyncing = context.select(
       (SyncCubit cubit) => cubit.state.isSyncing,
     );
+    final isOnline = context.select((SyncCubit cubit) => cubit.state.isOnline);
     final mockMode = context.select((MockServerCubit cubit) => cubit.state);
     return Scaffold(
       appBar: AppBar(
@@ -56,33 +57,45 @@ class PendingUploadsScreen extends StatelessWidget {
               : const SizedBox(height: 2),
         ),
       ),
-      body: BlocBuilder<UploadQueueCubit, UploadQueueState>(
-        builder: (context, state) {
-          if (!state.isLoaded) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final batches = state.queue.batches;
-          if (batches.isEmpty) {
-            return _Message(
-              icon: state.loadFailed
-                  ? Icons.error_outline
-                  : Icons.cloud_done_outlined,
-              text: state.loadFailed
-                  ? "The upload queue couldn't be read."
-                  : 'No pending uploads.\nBatches you upload appear here until the server '
-                        'confirms them.',
-            );
-          }
-          final anyFailed = batches.any((b) => b.status == UploadStatus.failed);
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: batches.length + 1,
-            separatorBuilder: (_, _) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => index == 0
-                ? _Summary(state: state, showRetry: anyFailed && !isSyncing)
-                : BatchCard(batch: batches[index - 1]),
-          );
-        },
+      body: Column(
+        children: [
+          if (!isOnline) const _OfflineBanner(),
+          Expanded(
+            child: BlocBuilder<UploadQueueCubit, UploadQueueState>(
+              builder: (context, state) {
+                if (!state.isLoaded) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final batches = state.queue.batches;
+                if (batches.isEmpty) {
+                  return _Message(
+                    icon: state.loadFailed
+                        ? Icons.error_outline
+                        : Icons.cloud_done_outlined,
+                    text: state.loadFailed
+                        ? "The upload queue couldn't be read."
+                        : 'No pending uploads.\nBatches you upload appear here until the server '
+                              'confirms them.',
+                  );
+                }
+                final anyFailed = batches.any(
+                  (b) => b.status == UploadStatus.failed,
+                );
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: batches.length + 1,
+                  separatorBuilder: (_, _) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) => index == 0
+                      ? _Summary(
+                          state: state,
+                          showRetry: anyFailed && !isSyncing,
+                        )
+                      : BatchCard(batch: batches[index - 1]),
+                );
+              },
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: SafeArea(
         child: Padding(
@@ -94,6 +107,38 @@ class PendingUploadsScreen extends StatelessWidget {
             style: FilledButton.styleFrom(
               minimumSize: const Size.fromHeight(48),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tells the user why nothing is uploading, and that it will resume by itself.
+class _OfflineBanner extends StatelessWidget {
+  const _OfflineBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Semantics(
+      liveRegion: true,
+      child: Material(
+        color: colors.secondaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.wifi_off, color: colors.onSecondaryContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  "You're offline. Uploads resume automatically when the "
+                  'connection returns.',
+                  style: TextStyle(color: colors.onSecondaryContainer),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -20,6 +20,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     required this._photos,
     this._clock = DateTime.now,
     this._newId = newId,
+    this._onWrite,
   }) : _db = database;
 
   static const _batches = UploadQueueDatabase.batches;
@@ -29,6 +30,10 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
   final PhotoStore _photos;
   final DateTime Function() _clock;
   final String Function() _newId;
+
+  /// Called after every write. The background worker uses it to tell the
+  /// app's isolate, which has its own repository and watchers, to reload.
+  final void Function()? _onWrite;
 
   /// Fires after every write, so open queue watchers reload.
   final _changes = StreamController<void>.broadcast();
@@ -110,7 +115,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
       await _photos.delete(relativePath);
       throw UploadQueueException('The photo could not be added', e);
     }
-    _changes.add(null);
+    _notifyWrite();
     return item;
   });
 
@@ -144,7 +149,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
       throw UploadQueueException('The batch could not be submitted', e);
     }
     if (batchId == null) return null;
-    _changes.add(null);
+    _notifyWrite();
     final snapshot = await _snapshot();
     return snapshot.batches.firstWhere((batch) => batch.id == batchId);
   });
@@ -199,7 +204,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
       throw UploadQueueException('The next upload could not be started', e);
     }
     if (batchId == null) return null;
-    _changes.add(null);
+    _notifyWrite();
     return _loadBatch(batchId);
   });
 
@@ -211,7 +216,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
       where: 'status = ?',
       whereArgs: [UploadStatus.failed.name],
     );
-    if (count > 0) _changes.add(null);
+    if (count > 0) _notifyWrite();
     return count;
   });
 
@@ -240,7 +245,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     // Files go only after the completed status is committed. If the app dies
     // in between, the files remain and nothing is lost.
     await _photos.deleteBatch(batchId);
-    _changes.add(null);
+    _notifyWrite();
   });
 
   @override
@@ -267,7 +272,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
         [UploadStatus.failed.name, batchId],
       );
     });
-    _changes.add(null);
+    _notifyWrite();
   });
 
   @override
@@ -304,7 +309,7 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
           }
           return rows.length;
         });
-        if (recovered > 0) _changes.add(null);
+        if (recovered > 0) _notifyWrite();
         return recovered;
       });
 
@@ -316,6 +321,33 @@ class SqfliteUploadQueueRepository implements UploadQueueRepository {
     );
     final next = rows.single['next'] as int?;
     return next == null ? null : DateTime.fromMillisecondsSinceEpoch(next);
+  }
+
+  @override
+  Future<bool> hasUnfinishedUploads() async {
+    final rows = await _db.query(
+      _batches,
+      columns: ['id'],
+      where: 'status IN (?, ?, ?)',
+      whereArgs: [
+        UploadStatus.pending.name,
+        UploadStatus.uploading.name,
+        UploadStatus.failed.name,
+      ],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// Another isolate (the background worker) changed the queue: reload every
+  /// open watcher from the database.
+  void notifyExternalChange() {
+    if (!_changes.isClosed) _changes.add(null);
+  }
+
+  void _notifyWrite() {
+    _changes.add(null);
+    _onWrite?.call();
   }
 
   /// Releases the database. The app never needs this; tests do.

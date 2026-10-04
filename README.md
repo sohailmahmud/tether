@@ -99,7 +99,7 @@ Layered architecture with BLoC/Cubit state management: **presentation (widgets +
 |---|---|
 | `CameraCubit` | Owns the camera screen: permission, opening and releasing the camera (with the app lifecycle and while another screen covers it), zoom (buttons, slider, pinch), tap-to-focus, and capture straight into the upload queue. Its sealed `CameraState` is Starting, PermissionRequired, Unavailable, Paused or Ready. |
 | `UploadQueueCubit` | Follows the persistent upload queue (the batch being captured and the submitted batches) for the camera badge and the Pending Uploads screen, and submits the batch being captured when the user taps **Upload batch**. |
-| `SyncCubit` | Runs the upload engine (`ProcessUploadQueue`) when an upload should start (app launch, a submitted batch, **Retry now**) and shows when a run is in progress. Per-batch progress comes from the queue itself. |
+| `SyncCubit` | Decides when the upload engine (`ProcessUploadQueue`) runs while the app is open: on launch, when the connection returns and stays up for 3 s, when a failed batch's retry time arrives, after **Upload batch**, and on **Retry now**. Keeps a background run scheduled while anything is unfinished, and exposes online/offline status for the offline banner. |
 | `MockServerCubit` | Holds the mock server mode chosen on Pending Uploads, so reviewers can trigger each failure path. |
 
 ## Local persistence
@@ -142,7 +142,26 @@ Required invariant, covered by tests and checked on the test phone: **failed upl
 
 Overlapping triggers share one run. A batch submitted mid-run is picked up before the run ends. An unexpected API exception still counts as a failed attempt, so a batch is never left stuck.
 
-**When uploads start:** on app launch, right after **Upload batch**, and on **Retry now** on Pending Uploads, which retries failed batches without waiting for their backoff. **Retry now** is a convenience only.
+**When uploads start, with no user action needed:**
+
+| Trigger | Where |
+|---|---|
+| App launch | Foreground: leftovers from last time |
+| Connection returns and stays up for 3 s | Foreground (`connectivity_plus`): failed batches are retried at once, skipping their backoff. The 3 s wait keeps a flapping network from setting off failing attempts |
+| A failed batch's retry time arrives | Foreground timer (paused while offline) |
+| App in the background or closed | **Background worker** (WorkManager through `workmanager`) |
+
+Also: right after **Upload batch**, and on **Retry now**, which is a convenience only.
+
+**Background worker.** While any batch is unfinished, a unique one-off WorkManager task is kept scheduled ("keep" policy, so there is only ever one), with a *network connected* constraint. WorkManager runs it in its own isolate, even if the app has been closed. The worker builds the same engine as the app (`SyncDependencies`) and runs it. If anything is still unfinished it returns `false`, so WorkManager retries with exponential backoff from 30 s, again only once there is a network. Background retries therefore follow WorkManager's backoff rather than the in-app retry times. The worker never closes the database: on Android, sqflite gives it the app's native connection.
+
+**Keeping open screens current.** The worker has its own repository in its own isolate, so its changes don't reach the app's watchers by themselves. Each write it makes is announced to the app's isolate through `IsolateNameServer` (`QueueChangeChannel`), and the app reloads the queue. On Android, WorkManager runs the worker in the app's process. This was found on the test phone: a batch the worker had uploaded still showed "Failed" on an open Pending Uploads screen. After the fix, the same scenario updated the open screen to "Uploaded" by itself.
+
+Checked on the test phone:
+
+- **App closed:** a batch failed (mock server error), the mock was switched back to normal, and the app was sent to the background and its process killed. About a minute later Android started the process for WorkManager's job service, not an activity, and the worker uploaded the batch. The app's screen was only opened about 15 s after the upload had finished.
+- **Retry with backoff:** WorkManager's log shows the worker returning `RETRY` while the server failed, then running again 30 s later and returning `SUCCESS`. The job is registered with a *CONNECTIVITY* constraint and exponential backoff from 30 s.
+- **Offline, then online:** with airplane mode on, a batch failed with "No internet connection". When airplane mode was turned off it was uploaded about 11 s later (reconnect, 3 s stable connection, upload) with the app open.
 
 **Storage:** schema version 2 adds `next_attempt_at`. Existing installs are upgraded in place; this was checked on the test phone, whose queue was kept through the upgrade.
 
@@ -195,6 +214,7 @@ The app requests only the camera permission it needs. The camera plugin's microp
 
 | Situation | What the user sees |
 |---|---|
+| Offline | A banner on Pending Uploads: uploads resume automatically when the connection returns |
 | Upload fails (no internet, timeout, server error) | The batch shows "Failed once" (or "Failed N×"), the error, and when it is due again. Photos stay on the device, and **Retry now** is offered |
 | Upload interrupted by the app closing | The batch returns to "Waiting to upload" with a note, and is retried |
 | Upload succeeds | "Uploaded", and the photos are removed from the device |
@@ -293,6 +313,7 @@ _To be added._
 - On Android the zoom shortcuts reflect what the main back camera exposes through its zoom range. Phones that show an ultra-wide lens only as a separate camera, not through zoom below 1x, get no 0.5x button.
 - Individual photos can't be removed from a batch before upload.
 - If the app is killed between moving a photo into storage and recording it (a few milliseconds), that file is left unreferenced. It is never uploaded, and only uses storage.
-- Failed batches are not yet retried automatically when their retry time arrives or when the connection returns. They are retried on the next app launch, the next **Upload batch**, or **Retry now**.
+- "Online" means the device has a network connection. A captive Wi-Fi portal counts as online, so uploads fail and back off until the network really works.
+- Android may delay background work (Doze, battery saver, and some vendors' battery managers). The in-app triggers cover the time the app is open.
 - There is no upload percentage; a batch shows as uploading until it finishes.
 - Uploaded batches stay listed (without their photos) until the app's data is cleared.
