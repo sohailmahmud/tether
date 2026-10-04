@@ -3,29 +3,34 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../domain/entities/camera_failure.dart';
-import '../../../domain/entities/captured_photo.dart';
 import '../../../domain/repositories/camera_repository.dart';
+import '../../../domain/repositories/upload_queue_repository.dart';
 import 'camera_state.dart';
 
 /// Owns the camera's lifecycle and the controls on the camera screen:
 /// permission, opening and releasing the camera, zoom, focus and capture.
+/// Each photo taken goes straight into the persistent upload queue.
 class CameraCubit extends Cubit<CameraState> {
-  CameraCubit(this._camera) : super(const CameraStarting());
+  CameraCubit(this._camera, this._uploads) : super(const CameraStarting());
 
   final CameraRepository _camera;
+  final UploadQueueRepository _uploads;
 
-  /// Opening, closing and capturing run one at a time, in call order, so a
+  /// Opening, releasing and capturing run one at a time, in call order, so a
   /// release can never overlap an open or dispose the camera mid-capture.
-  Future<void> _queue = Future<void>.value();
+  Future<void> _operations = Future<void>.value();
 
   /// While the system permission dialog is up, the app goes inactive and
   /// resumes around it; those lifecycle events must not open or close the camera.
   bool _requestingPermission = false;
 
-  // Kept across pause/resume so coming back restores the same view.
+  // The camera should be open only while the app is active and the camera
+  // screen is the one showing.
+  bool _appActive = true;
+  bool _screenVisible = true;
+
+  /// Kept across release and reopen so coming back restores the same view.
   double _zoom = 1;
-  CapturedPhoto? _lastCapture;
-  int _captureCount = 0;
 
   /// Called when the camera screen opens.
   Future<void> start() => _serialized(() async {
@@ -48,29 +53,27 @@ class CameraCubit extends Cubit<CameraState> {
   /// other apps can use it, as the camera plugin requires.
   Future<void> onAppInactive() {
     if (_requestingPermission) return Future<void>.value();
-    return _serialized(() async {
-      if (state is! CameraReady) return;
-      // Stop showing the preview before its controller is disposed.
-      _emit(const CameraPaused());
-      await _camera.close();
-    });
+    _appActive = false;
+    return _serialized(_release);
   }
 
   /// The app is in the foreground again, possibly back from Settings.
   Future<void> onAppResumed() {
     if (_requestingPermission) return Future<void>.value();
-    return _serialized(() async {
-      switch (state) {
-        case CameraPaused():
-          await _open();
-        case CameraPermissionRequired():
-          if (await _camera.permissionStatus() == CameraPermission.granted) {
-            await _open();
-          }
-        default:
-          break;
-      }
-    });
+    _appActive = true;
+    return _serialized(_reopen);
+  }
+
+  /// Another screen now covers the camera (e.g. Pending Uploads).
+  Future<void> onScreenHidden() {
+    _screenVisible = false;
+    return _serialized(_release);
+  }
+
+  /// The camera screen is showing again.
+  Future<void> onScreenShown() {
+    _screenVisible = true;
+    return _serialized(_reopen);
   }
 
   /// Sets zoom from the buttons, slider or pinch, clamped to what the camera supports.
@@ -95,7 +98,8 @@ class CameraCubit extends Cubit<CameraState> {
     await _camera.focusAt(x.clamp(0, 1).toDouble(), y.clamp(0, 1).toDouble());
   }
 
-  /// Takes a photo. Taps while a capture is in progress are ignored.
+  /// Takes a photo and adds it to the batch being captured. Taps while a
+  /// capture is in progress are ignored.
   Future<void> capture() {
     final current = state;
     if (current is! CameraReady || current.isCapturing) {
@@ -103,22 +107,18 @@ class CameraCubit extends Cubit<CameraState> {
     }
     emit(current.copyWith(isCapturing: true, captureFailed: false));
     return _serialized(() async {
+      var failed = false;
       try {
         final photo = await _camera.capture();
-        _lastCapture = photo;
-        _captureCount++;
-        _updateReady(
-          (ready) => ready.copyWith(
-            isCapturing: false,
-            lastCapture: photo,
-            captureCount: _captureCount,
-          ),
-        );
+        await _uploads.addToDraft(photo);
       } on CameraFailureException {
-        _updateReady(
-          (ready) => ready.copyWith(isCapturing: false, captureFailed: true),
-        );
+        failed = true;
+      } on UploadQueueException {
+        failed = true;
       }
+      _updateReady(
+        (ready) => ready.copyWith(isCapturing: false, captureFailed: failed),
+      );
     });
   }
 
@@ -128,7 +128,7 @@ class CameraCubit extends Cubit<CameraState> {
 
   @override
   Future<void> close() async {
-    await _queue;
+    await _operations;
     await _camera.close();
     return super.close();
   }
@@ -157,23 +157,37 @@ class CameraCubit extends Cubit<CameraState> {
       final capabilities = await _camera.openBackCamera();
       _zoom = capabilities.clampZoom(_zoom);
       if (_zoom != 1) await _camera.setZoom(_zoom);
-      _emit(
-        CameraReady(
-          capabilities: capabilities,
-          zoom: _zoom,
-          lastCapture: _lastCapture,
-          captureCount: _captureCount,
-        ),
-      );
+      _emit(CameraReady(capabilities: capabilities, zoom: _zoom));
     } on CameraFailureException catch (e) {
       _emit(CameraUnavailable(e.failure));
     }
   }
 
+  Future<void> _release() async {
+    if (state is! CameraReady) return;
+    // Stop showing the preview before its controller is disposed.
+    _emit(const CameraPaused());
+    await _camera.close();
+  }
+
+  Future<void> _reopen() async {
+    if (!_appActive || !_screenVisible) return;
+    switch (state) {
+      case CameraPaused():
+        await _open();
+      case CameraPermissionRequired():
+        if (await _camera.permissionStatus() == CameraPermission.granted) {
+          await _open();
+        }
+      default:
+        break;
+    }
+  }
+
   Future<void> _serialized(Future<void> Function() operation) {
-    final result = _queue.then((_) => operation());
+    final result = _operations.then((_) => operation());
     // A failed operation must not block the ones queued after it.
-    _queue = result.catchError((Object _) {});
+    _operations = result.catchError((Object _) {});
     return result;
   }
 

@@ -2,22 +2,26 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
-import '../../../domain/entities/captured_photo.dart';
-
-/// The latest photo with a badge counting this session's captures.
+/// The newest photo of the batch being captured, with a badge counting them.
 class CaptureThumbnail extends StatelessWidget {
-  const CaptureThumbnail({super.key, required this.photo, required this.count});
+  const CaptureThumbnail({
+    super.key,
+    required this.imagePath,
+    required this.count,
+  });
 
   static const size = 52.0;
 
-  final CapturedPhoto? photo;
+  final String? imagePath;
   final int count;
 
   @override
   Widget build(BuildContext context) {
-    final photo = this.photo;
+    final imagePath = this.imagePath;
     return Semantics(
-      label: count == 1 ? '1 photo taken' : '$count photos taken',
+      label: count == 1
+          ? '1 photo in this batch'
+          : '$count photos in this batch',
       excludeSemantics: true,
       child: SizedBox.square(
         dimension: size,
@@ -27,12 +31,12 @@ class CaptureThumbnail extends StatelessWidget {
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: photo == null
+                child: imagePath == null
                     ? const DecoratedBox(
                         decoration: BoxDecoration(color: Colors.white10),
                       )
                     : Image.file(
-                        File(photo.path),
+                        File(imagePath),
                         fit: BoxFit.cover,
                         // Decode at thumbnail size, not the photo's full resolution.
                         cacheWidth: 160,
