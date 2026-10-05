@@ -22,7 +22,9 @@ permissions:
 jobs:
   verify:
     name: Lint, test and build
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moves to a new Ubuntu release on its own schedule,
+    # which could change the toolchain under an unchanged commit.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
