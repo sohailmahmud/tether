@@ -2,8 +2,8 @@
 
 > Stay tethered to where you work and to what you capture.
 
-[![Android · Tether Attendance](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml)
-[![Flutter · Tether Capture](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml)
+[![Android · Tether Attendance](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml/badge.svg?branch=main)](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml?query=branch%3Amain)
+[![Flutter · Tether Capture](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml/badge.svg?branch=main)](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml?query=branch%3Amain)
 
 Tether is my submission for the Intelligent Machines **Senior App Developer Technical Assessment**: two production-grade mobile apps in one repository, one per task.
 
@@ -559,7 +559,7 @@ Dependencies are stable, widely adopted and kept to what each app needs. Version
 | [Android · Tether Attendance](.github/workflows/android-attendance.yml) | <ol><li>ktlint</li><li>Android Lint</li><li>unit and Compose UI tests</li><li>debug and R8 release builds</li></ol>Test reports and the debug APK are uploaded as artifacts. |
 | [Flutter · Tether Capture](.github/workflows/flutter-capture.yml) | <ol><li>formatting</li><li>`flutter analyze`</li><li>all tests with coverage</li><li>a release APK build</li></ol>The coverage summary and the APK are uploaded. |
 
-CI has no signing secrets, so its release builds fall back to the debug key. Signed APKs are built locally (see [How to run](#how-to-run)).
+Runners are pinned to Ubuntu 24.04, so a runner-image upgrade can't change the build under an unchanged commit. CI has no signing secrets, so its release builds fall back to the debug key. Signed APKs are built locally (see [How to run](#how-to-run)).
 
 **Static analysis:**
 - **Android:** ktlint and Android Lint, with 0 issues.
