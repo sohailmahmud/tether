@@ -5,12 +5,18 @@
 [![Android · Tether Attendance](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml)
 [![Flutter · Tether Capture](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml)
 
-Tether is my submission for the Intelligent Machines **Senior App Developer Technical Assessment**: two production-style mobile apps in one repository, one per task, built around the same principles of layered architecture, unidirectional state and verified behaviour.
+Tether is my submission for the Intelligent Machines **Senior App Developer Technical Assessment**: two production-grade mobile apps in one repository, one per task.
 
-| App | Task | Stack |
-|---|---|---|
-| **Tether Attendance** — [`android-attendance/`](android-attendance) | Task 1: geo-fenced attendance. Attendance can be marked only within 50 m of a saved office location. | Native Android · Kotlin · Jetpack Compose · Kotlin Flow |
-| **Tether Capture** — [`flutter-capture/`](flutter-capture) | Task 2: custom camera with batch capture and a resilient, offline-first upload queue | Flutter · BLoC/Cubit · layered architecture |
+Both are built to the same engineering standard:
+- business rules in a framework-free domain layer
+- unidirectional, lifecycle-aware state
+- offline-first persistence
+- every behaviour that matters covered by automated tests, CI and verification on a real device
+
+| | App | Task | Stack |
+|---|---|---|---|
+| <img src="docs/icons/tether-attendance.png" width="48" alt="Tether Attendance icon"> | **Tether Attendance** — [`android-attendance/`](android-attendance) | Task 1: geo-fenced attendance. Attendance can be marked only within 50 m of a saved office location. | Native Android · Kotlin · Jetpack Compose · Kotlin Flow |
+| <img src="docs/icons/tether-capture.png" width="48" alt="Tether Capture icon"> | **Tether Capture** — [`flutter-capture/`](flutter-capture) | Task 2: custom camera with batch capture and a resilient, offline-first upload engine | Flutter · BLoC/Cubit · layered architecture |
 
 The name reflects what both apps do: attendance is tethered to a 50 m radius around the office, and captured photos stay tethered to a local queue until the server confirms them.
 
@@ -19,42 +25,56 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
   &nbsp;
   <img src="docs/screenshots/capture-zoom-2x.jpg" width="240" alt="Tether Capture: camera at 2x zoom with the slider and 1x, 2x, 5x buttons">
   &nbsp;
-  <img src="docs/screenshots/uploads-states.png" width="240" alt="Pending Uploads with an uploading, a failed and an uploaded batch">
+  <img src="docs/screenshots/uploads-states.png" width="240" alt="Upload Manager with a batch uploading at 14%, a failed batch and an uploaded batch">
 </p>
 
-**Contents:** [Highlights](#highlights) · [Requirements](#requirements-traceability) · [Structure](#project-structure) · [Architecture](#architecture) · [BLoC/Cubit classes](#main-bloccubit-classes) · [Decisions](#key-engineering-decisions) · [Persistence](#local-persistence) · [Sync](#sync-strategy) · [Errors](#error-handling) · [Mock API](#mock-api) · [Testing](#testing-and-verification) · [AI usage](#generative-ai-usage) · [How to run](#how-to-run) · [Screenshots](#screenshots) · [Release APK](#release-apk) · [Limitations](#known-limitations)
+**Contents:** [Highlights](#highlights) · [Principles](#engineering-principles) · [Requirements](#requirements-traceability) · [Structure](#project-structure) · [Architecture](#architecture) · [BLoC/Cubit classes](#main-bloccubit-classes) · [Decisions](#architecture-decisions) · [Persistence](#local-persistence) · [Sync](#sync-strategy) · [Errors](#error-handling) · [Mock API](#mock-api) · [Testing](#testing-and-verification) · [AI usage](#generative-ai-usage) · [How to run](#how-to-run) · [Screenshots](#screenshots) · [Release APK](#release-apk) · [Limitations](#known-limitations)
 
 ## Highlights
 
-- **One geofence rule, enforced twice.** Eligibility lives in a single domain function, `AttendancePolicy`, that combines distance, GPS accuracy and fix freshness. The UI uses it to enable the button, and `MarkAttendanceUseCase` re-validates it at the moment of the tap, so a stale screen can never record an invalid check-in.
-- **Offline-first upload queue with exactly-once processing.** A transactional SQLite queue persists every batch and photo. An atomic claim prevents the app and the background worker from uploading the same batch, and photos are deleted only after the server has confirmed the upload.
-- **Self-healing sync.** Uploads resume without user action:
-  - In the foreground, when the connection returns and is stable.
-  - In the background, through WorkManager with a network constraint and exponential backoff.
-  - After a crash, uploads interrupted by process death are recovered.
-- **Hardware-adaptive camera.** Zoom shortcuts (0.5x, 1x, 2x, …) are derived from the device's real zoom range. Tap-to-focus is mapped through the display orientation, and the camera is owned in a lifecycle-safe way.
+- **One geofence rule, enforced twice.** Eligibility is a single domain policy, `AttendancePolicy`, combining distance, GPS accuracy and fix freshness. The UI uses it to enable the button, and `MarkAttendanceUseCase` re-validates it at the moment of the tap, so a stale screen can never record an invalid check-in.
+- **Offline-first upload engine with exactly-once processing.** A transactional SQLite queue is the system of record. Atomic claims, leases and idempotency keys keep the app and the background worker from ever uploading the same batch twice, and photos are deleted only after the server confirms them.
+- **Self-healing sync with live progress.** Uploads resume without user action:
+  - in the foreground, on a stable reconnection
+  - in the background, through WorkManager with a network constraint and exponential backoff
+  - after a crash, through lease recovery
+
+  The Upload Manager shows each batch's progress as a percentage and bytes sent.
+- **Hardware-adaptive camera.** Zoom shortcuts (0.5x, 1x, 2x, …) are derived from the device's real zoom range. Tap-to-focus is mapped through the display orientation, and camera ownership is lifecycle-safe.
 - **Verified, not assumed.**
-  - 216 automated tests (85 Android, 131 Flutter), from domain rules to Compose UI and full app flows.
-  - Strict static analysis, and continuous integration on every push and pull request.
-  - Release builds (R8-shrunk and AOT-compiled) verified on a physical device, including a background upload with the app killed.
+  - 222 automated tests (85 Android, 137 Flutter), from domain rules to Compose UI and end-to-end app flows.
+  - Strict static analysis and CI on every pull request.
+  - Signed release builds verified on a physical device, including a background upload with the app killed.
+
+## Engineering principles
+
+| Quality attribute | How it is achieved |
+|---|---|
+| **Correctness** | Each business rule lives in exactly one domain place (`AttendancePolicy`, `ProcessUploadQueue`), and decisions are re-validated at the moment they take effect |
+| **Reliability** | Transactional persistence, atomic state transitions, leases for crash recovery, idempotent uploads, and bounded exponential backoff |
+| **Data integrity** | Schema-level constraints (foreign keys, `CHECK`, a partial unique index); files are deleted only after the completed status is committed |
+| **Responsiveness** | GPS and camera are active only while visible; hardware access is serialized; long operations report determinate progress |
+| **Security and privacy** | Least-privilege permissions, cloud backup disabled, no secrets in version control, release signing outside the repository |
+| **Testability** | A framework-free domain layer, explicit composition roots, and fakes only at the hardware, network and storage edges |
+| **Operability** | CI gates for formatting, lint and analysis, tests and release builds; state-transition logging in debug builds only |
 
 ## Requirements traceability
 
 | From the brief | Implementation | Verified by |
 |---|---|---|
 | **Task 1:** "Set Office Location" fetches GPS coordinates and saves them locally | `SetOfficeLocationUseCase` takes a fresh high-accuracy fix (±50 m or better) and persists it in Preferences DataStore | Unit tests; device, including after a restart |
-| Mark Attendance enabled only within 50 m | `AttendancePolicy.evaluate()`, re-checked by `MarkAttendanceUseCase` at the tap | Boundary tests (49.99 m in, 50.01 m out); emulator walk-in |
+| Mark Attendance enabled only within 50 m | `AttendancePolicy.evaluate()`, re-checked by `MarkAttendanceUseCase` at the tap | Boundary tests (49.99 m in, 50.01 m out); Compose UI tests; emulator walk-in |
 | Real-time distance indicator | Live fused-location updates → `StateFlow` → distance ring and "You are N m away" | Device; emulator walk-in |
 | UI from the reference screenshot, in Jetpack Compose | `AttendanceScreen` | [Screenshots](#screenshots), taken at the reference's own coordinates |
 | **Task 2:** custom `CameraPreviewScreen` | `CameraPreviewScreen` with `CameraCubit` | Widget tests; device |
 | Pinch-to-zoom, slider and rounded buttons (0.5x, 1x, … per back camera) | Zoom levels derived at runtime from the back camera's zoom range | Unit and widget tests; device (1x, 2x, 5x on a 1x–8x camera) |
 | Tap-to-focus with a visual indicator | Focus and exposure point at the tap, with an animated focus square | Device |
-| Multiple batches and a "Pending Uploads" list | Persistent SQLite queue and `PendingUploadsScreen` | Real-SQL tests; device, including after a restart |
+| Multiple batches and a "Pending Uploads" list | Persistent SQLite queue; the **Upload Manager** screen lists pending uploads with status and live progress | Real-SQL tests; app-flow tests; device, including after a restart |
 | Background worker that monitors connectivity | WorkManager task with a network-connected constraint | Device: with the app killed, Android started the process for the job and the upload completed |
 | Low bandwidth or no internet: images stay in the local queue | A failed upload keeps its photos and records and is retried with backoff | Tests; device (slow connection, server error, airplane mode) |
-| Automatic retry once a stable connection is detected | `SyncCubit` (connection stable for 3 s) and the background worker | Device; emulator recording |
+| Automatic retry once a stable connection is detected | `SyncCubit` (connection stable for 3 s) and the background worker | App-flow tests; device; emulator recording |
 | Mock API with success and failure responses | `MockUploadApi` behind the `UploadApi` contract, four modes | Tests; in-app mode selector |
-| **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 216 automated tests, run in CI |
+| **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 222 automated tests, run in CI |
 | **Deliverables:** source code, README, release APK link | This repository, this README, [Release APK](#release-apk) | Both apps build from a fresh clone; the signed APKs were installed and smoke-tested on a device |
 
 ## Project structure
@@ -66,9 +86,9 @@ tether/
 │       ├── data/
 │       │   ├── local/           office location and last check-in in Preferences DataStore
 │       │   └── location/        device position from the fused location provider
-│       ├── domain/              models, attendance rules, repository contracts, use cases
+│       ├── domain/              models, attendance policy, repository contracts, use cases
 │       ├── presentation/        Compose UI, ViewModel, theme
-│       └── di/                  manual dependency wiring
+│       └── di/                  composition root (AppContainer)
 ├── flutter-capture/             Task 2: Flutter app
 │   └── lib/
 │       ├── main.dart            composition root
@@ -79,15 +99,19 @@ tether/
 │       │                        connectivity, WorkManager scheduling
 │       └── presentation/
 │           ├── camera/          CameraPreviewScreen, CameraCubit, camera widgets
-│           └── uploads/         PendingUploadsScreen, UploadQueueCubit, SyncCubit, MockServerCubit
-└── docs/screenshots/            images used in this README
+│           └── uploads/         Upload Manager screen, UploadQueueCubit, SyncCubit, MockServerCubit
+├── docs/
+│   ├── adr/                     architecture decision records
+│   ├── icons/                   app icons
+│   └── screenshots/             images used in this README
+└── .github/workflows/           CI for each app
 ```
 
 **Approach.**
-- **Two independent apps,** one per task, each with its own build and release artifact.
+- **Two independent apps,** one per task, each with its own build, CI workflow and release artifact ([ADR-0001](docs/adr/0001-two-applications-one-per-task.md)).
 - **The same layered shape in both:** presentation → domain → data.
-- **Business rules in a framework-free domain layer:** the geofence in `AttendancePolicy`, the upload engine in `ProcessUploadQueue`.
-- **One-way state.** On Android, a `StateFlow` in a ViewModel; on Flutter, one BLoC/Cubit per concern. Screens render state and dispatch user intents, nothing more.
+- **Business rules in a framework-free domain layer.**
+- **One-way state.** On Android, a `StateFlow` in a ViewModel; on Flutter, one Cubit per concern ([ADR-0002](docs/adr/0002-unidirectional-state-management.md)). Screens render state and dispatch intents, nothing more.
 
 ## Architecture
 
@@ -132,9 +156,9 @@ flowchart LR
 
 **State management (Kotlin Flow).**
 - **Single source of truth:** `uiState` is one `StateFlow`, built by `combine`-ing the attendance status, the last check-in from storage, and a small `MutableStateFlow` of in-flight actions and errors. Storage stays authoritative, so saving an office automatically restarts tracking against it.
-- **Lifecycle-scoped tracking:** the state is shared with `SharingStarted.WhileSubscribed(5_000)` and collected with `collectAsStateWithLifecycle`. GPS runs only while the screen is visible, and survives a configuration change without restarting.
+- **Lifecycle-scoped tracking:** the state is shared with `SharingStarted.WhileSubscribed(5_000)` and collected with `collectAsStateWithLifecycle`. GPS runs only while the screen is visible, and survives configuration changes without restarting.
 
-**Geofence rules (`AttendancePolicy`).**
+**Geofence policy (`AttendancePolicy`)** ([ADR-0003](docs/adr/0003-geofence-eligibility-policy.md))
 
 | Rule | Value | Rationale |
 |---|---|---|
@@ -179,15 +203,15 @@ flowchart LR
 ```
 
 - **Domain** (no Flutter or plugin imports):
-  - Camera capabilities, including the rule that picks the zoom buttons.
-  - Upload queue entities and their status model.
-  - The `ProcessUploadQueue` engine with its `RetryPolicy`.
-  - The contracts the data layer implements.
+  - camera capabilities, including the rule that picks the zoom buttons
+  - upload queue entities and their status model
+  - the `ProcessUploadQueue` engine with its `RetryPolicy` and `UploadProgress`
+  - the contracts the data layer implements
 - **Data:** the `camera` and `permission_handler` plugins, the SQLite queue and photo store, the mock API, connectivity (`connectivity_plus`) and WorkManager scheduling (`workmanager`).
-- **Presentation:** two screens and four Cubits. Widgets hold no business logic. The demo-only `MockServerCubit` is left out of the diagram.
+- **Presentation:** two screens (the camera and the Upload Manager) and four Cubits. Widgets hold no business logic. The demo-only `MockServerCubit` is left out of the diagram.
 - **Composition root** (`main.dart`, `app/`):
   - Wires concrete implementations.
-  - `SyncDependencies` builds the upload engine identically for the app and for the background worker isolate.
+  - `SyncDependencies` builds the upload engine identically for the app and for the background worker isolate ([ADR-0008](docs/adr/0008-composition-roots-and-manual-di.md)).
   - The presentation layer never imports the camera plugin, so widget tests run against a stand-in preview.
 
 **Camera behaviour.**
@@ -203,20 +227,24 @@ flowchart LR
 |---|---|
 | `CameraCubit` | Owns the camera lifecycle and controls: permission, open and release, zoom, tap-to-focus, and capture into the upload queue. It exposes a sealed `CameraState`: Starting, PermissionRequired, Unavailable, Paused or Ready. |
 | `UploadQueueCubit` | Streams the persistent queue to the UI (the batch being captured and the submitted batches), and submits the current batch when the user taps **Upload batch**. |
-| `SyncCubit` | Decides when uploads run while the app is open: on launch, on a stable reconnection, when a retry falls due, and on user request. It keeps a background run scheduled while work remains and exposes connectivity for the offline banner. |
+| `SyncCubit` | Decides when uploads run while the app is open: on launch, on a stable reconnection, when a retry falls due, and on user request. It exposes connectivity and per-batch upload progress, and keeps a background run scheduled while work remains. |
 | `MockServerCubit` | Holds the simulated server mode, so every success and failure path can be demonstrated without a backend. |
 
-## Key engineering decisions
+## Architecture decisions
 
-| Decision | Alternatives considered | Rationale |
+The significant decisions are recorded as [Architecture Decision Records](docs/adr/README.md), each with its context, consequences and the alternatives considered.
+
+| ADR | Decision | Key trade-off |
 |---|---|---|
-| `StateFlow` + ViewModel, manual DI (`AppContainer`) | Hilt, Koin | One screen and three repositories don't justify a DI framework. Explicit wiring stays readable and testable. |
-| Preferences DataStore for the office and last check-in | SharedPreferences, Room | Asynchronous, transactional and Flow-native. Two small records don't need a relational schema. |
-| SQLite (`sqflite`) for the upload queue | Hive, Isar, Drift | Transactions and safe multi-isolate access are required for exactly-once claims. Hive offers neither, Isar's long-term maintenance is uncertain, and Drift adds code generation for a two-table schema. |
-| Photos moved out of the cache, stored by relative path | Keep in cache; absolute paths | Android may clear the cache at any time. Relative paths survive a change of storage location. |
-| One-off unique WorkManager task with a network constraint, plus foreground triggers | Periodic work only; foreground only | Periodic work has a 15-minute floor. A constrained one-off task runs as soon as a network is available, backoff paces retries, and foreground triggers react instantly while the app is open. |
-| Mock API behind the `UploadApi` contract, with selectable failure modes | Commented-out API code | Exercises every failure path end to end. A real HTTP client replaces one data-layer class. |
-| Two apps, two APKs | One native app embedding Flutter | The brief doesn't require integration. Embedding would add build and runtime risk without improving either task. |
+| [0001](docs/adr/0001-two-applications-one-per-task.md) | Two independent apps, one per task | Each task uses its idiomatic stack and ships independently; reviewers install two APKs |
+| [0002](docs/adr/0002-unidirectional-state-management.md) | One `StateFlow` per screen; one Cubit per concern | Deterministic, testable state; serialization is explicit instead of handled by event transformers |
+| [0003](docs/adr/0003-geofence-eligibility-policy.md) | One geofence policy, re-validated at the moment of the tap | A check-in is only accepted from a fix precise enough to trust; the platform Geofencing API can't do a live 50 m check |
+| [0004](docs/adr/0004-sqlite-upload-queue.md) | SQLite as the queue's system of record | ACID and multi-isolate safety, at the cost of hand-written SQL, covered by real-SQL tests; Hive, Isar and Drift were rejected |
+| [0005](docs/adr/0005-exactly-once-processing.md) | Atomic claims, leases, guarded failures, idempotency keys | Effectively exactly-once storage, provided the server honours the key |
+| [0006](docs/adr/0006-sync-orchestration.md) | Foreground triggers plus a constrained WorkManager task | Instant in-app response and background completion; background timing is subject to OS policy |
+| [0007](docs/adr/0007-api-boundary-and-mock-server.md) | A typed `UploadApi` contract with progress; a mock server with failure modes | Every failure path can be demonstrated; a real client replaces one data-layer class |
+| [0008](docs/adr/0008-composition-roots-and-manual-di.md) | Manual dependency injection through composition roots | Explicit and test-friendly; a framework would only pay off in a much larger graph |
+| [0009](docs/adr/0009-security-privacy-and-release.md) | Least privilege, no cloud backup, no secrets in version control | A minimal attack surface; the keystore must be backed up outside the repository |
 
 ## Local persistence
 
@@ -224,7 +252,7 @@ flowchart LR
 - `office_location`: latitude, longitude, fix accuracy and save time, written in a single transaction so a read never mixes old and new values. A missing, partial or out-of-range record reads as "no office set".
 - `attendance`: the most recent check-in (time, distance and accuracy).
 
-**Tether Capture:** an SQLite upload queue.
+**Tether Capture:** an SQLite upload queue, the system of record until the server confirms a batch ([ADR-0004](docs/adr/0004-sqlite-upload-queue.md)).
 - `upload_batches`: status, retry count, last error, next attempt time, and created, submitted and updated timestamps.
 - `upload_items`: one row per photo, with its file path, size, status and capture time.
 
@@ -244,9 +272,7 @@ flowchart LR
 - If recording it fails, the file is removed.
 - Files orphaned by a process kill at an unlucky moment are swept at the next launch.
 
-**Backup and device transfer** are disabled in both apps:
-- A restored office location could be edited to move the geofence.
-- A restored queue would no longer match the server.
+**Backup and device transfer** are disabled in both apps: a restored office location could be edited to move the geofence, and a restored queue would no longer match the server.
 
 ## Sync strategy
 
@@ -270,19 +296,19 @@ stateDiagram-v2
 2. **Claim:** the oldest due batch is marked *uploading* inside one exclusive SQLite transaction, with an update conditional on the status just read.
    - On Android, sqflite shares one native connection between the app and the background isolate and serializes their transactions.
    - The claim is therefore exactly-once across both. This was confirmed in the plugin source and covered by a concurrent-claim test.
-3. **Upload** through `UploadApi`, with the batch id as the idempotency key.
+3. **Upload** through `UploadApi`, with the batch id as the idempotency key. Bytes sent are published as `UploadProgress`, starting at 0% the moment the batch is claimed.
 4. **Record the outcome:**
    - **Success:** the batch is completed, then its files are deleted.
    - **Failure:** photos and records are kept, the attempt is counted, and a retry is scheduled (30 s, doubling, capped at 15 min).
    - **No connection:** the run stops early, since every remaining batch would fail the same way.
 
-**Guarantees, each covered by tests:**
+**Guarantees, each covered by tests** ([ADR-0005](docs/adr/0005-exactly-once-processing.md)):
 - **No data loss.** Files are deleted only after completion is committed.
 - **No duplicate processing.** Claims are atomic, and a late failure from an attempt that outlived its lease can't overwrite a completed batch.
 - **Restart safety.** Interrupted uploads are recovered by the lease.
 - **Bounded retries.** Backoff limits how often a failing server is retried, and an unexpected storage error waits at least 30 s rather than spinning.
 
-**Triggers, with no user action needed:**
+**Triggers, with no user action needed** ([ADR-0006](docs/adr/0006-sync-orchestration.md)):
 
 | Trigger | Mechanism |
 |---|---|
@@ -293,14 +319,18 @@ stateDiagram-v2
 
 **Upload batch** and **Retry now** also start a run; they are conveniences, not the retry mechanism.
 
-**Background worker:**
+**Background worker.**
 - While any batch is unfinished, one unique one-off WorkManager task is kept scheduled, with a *network connected* constraint and exponential backoff.
 - WorkManager runs it in a separate isolate, even after the app is closed.
 - The worker builds the same engine as the app and asks to be retried until the queue is empty.
 
-**Cross-isolate consistency:**
-- The worker's writes are announced to the app's isolate over `IsolateNameServer` (`QueueChangeChannel`), so an open Pending Uploads screen updates the moment the background worker finishes.
+**Cross-isolate consistency.**
+- The worker's writes are announced to the app's isolate over `IsolateNameServer` (`QueueChangeChannel`), so an open Upload Manager updates the moment the background worker finishes.
 - The worker never closes the shared database connection.
+
+**Progress.** Material guidance calls for a determinate indicator whenever an operation's progress can be measured, and an upload's byte count always can.
+- **Foreground uploads:** each uploading batch shows a determinate bar with its percentage and bytes sent ("14% · 64.0 KB of 444 KB"), exposed to screen readers as a progress value.
+- **Background uploads:** progress lives in the worker's isolate, so those batches show an indeterminate bar.
 
 ## Error handling
 
@@ -336,7 +366,7 @@ When the user returns from Settings with the cause fixed, the banner clears and 
 | No back camera, or the camera fails to start | A clear message, with **Try again** where retrying can help |
 | A capture fails, or the photo can't be saved to the queue | A snackbar; the camera stays ready and nothing half-saved remains |
 | Storage can't be opened at launch (e.g. the device is full) | A dedicated "Can't open storage" screen instead of a blank app |
-| Offline | A banner: uploads resume automatically when the connection returns |
+| Offline | A banner in the Upload Manager: uploads resume automatically when the connection returns |
 | An upload fails (no internet, timeout, server error) | "Failed once" (or "Failed N×") with the error and the next retry time. Photos stay on the device, and **Retry now** is offered |
 | An upload is interrupted by the process dying | The batch returns to the queue with a note, and is retried |
 
@@ -344,11 +374,12 @@ Only the camera permission is requested. Permissions that plugins declare but th
 
 ## Mock API
 
-The brief provides no backend. `MockUploadApi` implements the `UploadApi` contract in the data layer, so replacing it with a real HTTP client changes nothing above that layer.
+The brief provides no backend. `MockUploadApi` implements the `UploadApi` contract in the data layer, so replacing it with a real HTTP client changes nothing above that layer ([ADR-0007](docs/adr/0007-api-boundary-and-mock-server.md)).
 
 - **Real connectivity:** with no network (e.g. airplane mode) every upload fails with "No internet connection", whatever the mode.
+- **Progress:** bytes sent are reported every 100 ms. A timeout or a dropped connection stops at the fraction actually transferred.
 - **Idempotent:** re-sending a stored batch returns its original receipt, which is the contract a real server must honour for the batch-id key.
-- **Modes**, selected under **Mock server** on Pending Uploads and shared with the background worker through a small settings file:
+- **Modes**, selected under **Mock server** in the Upload Manager and shared with the background worker through a small settings file:
 
 | Mode | Behaviour |
 |---|---|
@@ -359,7 +390,7 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 
 ## Testing and verification
 
-**Automated tests: 216.**
+**Automated tests: 222.**
 
 | App | Layer | Tests | What they prove |
 |---|---|---|---|
@@ -367,10 +398,10 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 | Android | Persistence | 14 | Record encoding, and the DataStore repositories on real files: restart survival, and corrupt or partial data reads as "not set" |
 | Android | Presentation | 26 | ViewModel state transitions: permissions, errors, double taps, stale fixes, lifecycle |
 | Android | Compose UI | 12 | `AttendanceScreen` on the JVM through Robolectric: each state's text, button enablement, the replace-office confirmation, and every action a tap reports |
-| Flutter | Domain | 17 | Upload engine outcomes, retry policy, zoom-level selection |
-| Flutter | Data | 36 | Real SQL through `sqflite_common_ffi`, including concurrent claims, restart survival, schema upgrade and orphan cleanup, plus every mock API mode |
-| Flutter | BLoC/Cubit | 41 | Camera lifecycle, capture concurrency, sync triggers and timing, queue streaming |
-| Flutter | Widgets and app wiring | 32 | Screens, the background run result, cross-isolate notifications, the startup failure screen |
+| Flutter | Domain | 18 | Upload engine outcomes and progress, retry policy, zoom-level selection |
+| Flutter | Data | 38 | Real SQL through `sqflite_common_ffi`, including concurrent claims, restart survival, schema upgrade and orphan cleanup, plus every mock API mode and its progress |
+| Flutter | BLoC/Cubit | 42 | Camera lifecycle, capture concurrency, sync triggers and timing, upload progress, queue streaming |
+| Flutter | Widgets and app wiring | 34 | Screens (including determinate and indeterminate progress), the background run result, cross-isolate notifications, the startup failure screen |
 | Flutter | App flows | 5 | The real `TetherCaptureApp` end to end, with fakes only for the camera and network: capture → upload → uploaded; offline → queued → automatic upload once the connection is stable; server error → automatic retry after backoff; Retry now; separate batches |
 
 **Techniques:**
@@ -408,7 +439,7 @@ CI has no signing secrets, so its release builds fall back to the debug key. Sig
 | Restart persistence | The office location and the upload queue survived force-stop and relaunch; the queue also survived an in-place schema upgrade |
 | Background upload, app killed (release build) | When the backoff ended, Android started the process for the WorkManager job, and the worker uploaded the batch with no UI |
 | Offline → online | A batch failed in airplane mode and uploaded about 11 s after reconnecting, with no tap |
-| Low bandwidth | A batch timed out in slow-connection mode, kept its photos, and later uploaded automatically |
+| Low bandwidth | Progress climbed at about 16 KB/s, the batch timed out with its photos kept, and it uploaded automatically afterwards |
 | App and worker concurrently | Overlapping runs never processed the same batch twice |
 | Final signed APKs, fresh install | Permission prompts appeared on first launch. The office was saved from a ±34 m fix and a check-in was recorded. A ±70 m fix locked check-in until accuracy recovered. A 3-photo batch was captured and uploaded |
 
@@ -424,7 +455,7 @@ I used generative AI as an engineering accelerator in two distinct roles, while 
 **Engineering workflow:**
 1. **Plan:** the master prompt fixed scope, priorities and acceptance criteria before any code was written.
 2. **Execute:** each phase was implemented in isolation, then stopped for review with a report of what changed, evidence, requirement status and a proposed commit.
-3. **Review and decide:** I reviewed every phase before it was committed and merged through a pull request. I made the architectural and delivery decisions:
+3. **Review and decide:** I reviewed every phase before it was committed and merged through a pull request. I made the architectural and delivery decisions (recorded as [ADRs](docs/adr/README.md)):
    - the storage engine for the queue
    - the branching strategy
    - release packaging
@@ -508,7 +539,7 @@ flutter run
 
 - **Capture:**
   - Take a few photos and tap **Upload batch**.
-  - On **Pending Uploads**, use **Mock server** to switch between Normal, Slow connection, Server error and Unstable connection.
+  - In the **Upload Manager**, use **Mock server** to switch between Normal, Slow connection, Server error and Unstable connection.
   - To see automatic recovery, enable airplane mode, upload a batch, then disable it.
     - With the app open, the batch uploads a few seconds later.
     - With the app closed, the background worker uploads it once the network is back and its backoff has passed.
@@ -528,7 +559,7 @@ Release signing reads `android-attendance/keystore.properties` and `flutter-capt
 # Android: formatting, lint, unit and Compose UI tests (85)
 cd android-attendance && ./gradlew ktlintCheck lintDebug testDebugUnitTest
 
-# Flutter: formatting, static analysis, unit, widget and app-flow tests (131)
+# Flutter: formatting, static analysis, unit, widget and app-flow tests (137)
 cd flutter-capture && dart format --set-exit-if-changed lib test && flutter analyze && flutter test
 ```
 
@@ -548,7 +579,7 @@ cd flutter-capture && dart format --set-exit-if-changed lib test && flutter anal
 
 **Sources:**
 - **Attendance screens:** an emulator with a simulated location, placed at the reference screenshot's coordinates.
-- **Queue screens:** the emulator's virtual camera scene.
+- **Upload Manager screens:** the emulator's virtual camera scene.
 - **Zoom and focus:** a physical device, because the emulator camera supports neither.
 
 **Tether Attendance**
@@ -567,13 +598,13 @@ cd flutter-capture && dart format --set-exit-if-changed lib test && flutter anal
 |---|---|---|
 | <img src="docs/screenshots/capture-zoom-2x.jpg" width="240" alt="2x zoom selected, slider moved"> | <img src="docs/screenshots/capture-tap-to-focus.jpg" width="240" alt="Yellow focus square at the tapped point"> | <img src="docs/screenshots/capture-batch.jpg" width="240" alt="Three photos in the batch, Upload batch (3)"> |
 
-| Uploading, failed and uploaded | Offline | Reconnected: recovers by itself |
+| Upload Manager: progress, failure, success | Low bandwidth: progress, then timeout | Offline |
 |---|---|---|
-| <img src="docs/screenshots/uploads-states.png" width="240" alt="Pending Uploads with an uploading, a failed and an uploaded batch"> | <img src="docs/screenshots/uploads-offline.png" width="240" alt="Offline banner; the failed batch keeps its photos"> | <img src="docs/screenshots/uploads-auto-retry.gif" width="240" alt="After airplane mode is turned off, the failed batch uploads with no tap"> |
+| <img src="docs/screenshots/uploads-states.png" width="240" alt="Upload Manager with a batch uploading at 14%, a failed batch and an uploaded batch"> | <img src="docs/screenshots/uploads-slow-progress.gif" width="240" alt="Progress climbing from 5% to 27% at about 16 KB/s, then the batch fails with a timeout and keeps its photos"> | <img src="docs/screenshots/uploads-offline.png" width="240" alt="Offline banner; failed batches keep their photos"> |
 
-| Mock server modes |
-|---|
-| <img src="docs/screenshots/uploads-mock-server.png" width="240" alt="Mock server sheet: Normal, Slow connection, Server error, Unstable connection"> |
+| Reconnected: recovers by itself | Mock server modes |
+|---|---|
+| <img src="docs/screenshots/uploads-auto-retry.gif" width="240" alt="After airplane mode is turned off, the failed batches upload with live progress and no tap"> | <img src="docs/screenshots/uploads-mock-server.png" width="240" alt="Mock server sheet: Normal, Slow connection, Server error, Unstable connection"> |
 
 ## Release APK
 
@@ -607,6 +638,7 @@ The [v1.0.0 release page](https://github.com/sohailmahmud/tether/releases/tag/v1
 
 - **Connectivity:** "online" means a network connection, not proven internet reachability. Behind a captive portal, uploads fail and back off until the network really works.
 - **Background execution:** Android may defer background work (Doze, battery saver, vendor battery managers). While the app is closed, retries follow WorkManager's backoff, which can grow to its 5-hour cap if the server keeps failing; with the app open they are capped at 15 minutes.
+- **Progress from the worker:** uploads run by the background worker show an indeterminate bar, because their progress lives in another isolate.
 - **Mock server state:** the mock keeps its idempotency record in memory, separately in each isolate, and loses it on restart. A real server persists it.
 - **Camera scope:** portrait only, with no flash or front camera (the brief asks for back-camera zoom and focus). An ultra-wide lens that Android exposes only as a separate camera, rather than through zoom below 1x, gets no 0.5x button.
-- **Uploads:** there is no per-batch progress percentage, and individual photos can't be removed from a batch before upload.
+- **Batch editing:** individual photos can't be removed from a batch before upload.
