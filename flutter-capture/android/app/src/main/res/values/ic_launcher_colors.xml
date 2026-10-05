@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tether brand blue, shared with Tether Attendance and the app's theme seed. -->
+    <color name="ic_launcher_background">#2563EB</color>
+</resources>
