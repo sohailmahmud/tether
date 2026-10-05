@@ -2,6 +2,9 @@
 
 > Stay tethered to where you work and to what you capture.
 
+[![Android · Tether Attendance](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/android-attendance.yml)
+[![Flutter · Tether Capture](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml/badge.svg)](https://github.com/sohailmahmud/tether/actions/workflows/flutter-capture.yml)
+
 Tether is my submission for the Intelligent Machines **Senior App Developer Technical Assessment**: two production-style mobile apps in one repository, one per task, built around the same principles of layered architecture, unidirectional state and verified behaviour.
 
 | App | Task | Stack |
@@ -31,8 +34,8 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
   - After a crash, uploads interrupted by process death are recovered.
 - **Hardware-adaptive camera.** Zoom shortcuts (0.5x, 1x, 2x, …) are derived from the device's real zoom range. Tap-to-focus is mapped through the display orientation, and the camera is owned in a lifecycle-safe way.
 - **Verified, not assumed.**
-  - 194 automated tests: 68 Android, 126 Flutter.
-  - Strict static analysis.
+  - 216 automated tests (85 Android, 131 Flutter), from domain rules to Compose UI and full app flows.
+  - Strict static analysis, and continuous integration on every push and pull request.
   - Release builds (R8-shrunk and AOT-compiled) verified on a physical device, including a background upload with the app killed.
 
 ## Requirements traceability
@@ -51,7 +54,7 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
 | Low bandwidth or no internet: images stay in the local queue | A failed upload keeps its photos and records and is retried with backoff | Tests; device (slow connection, server error, airplane mode) |
 | Automatic retry once a stable connection is detected | `SyncCubit` (connection stable for 3 s) and the background worker | Device; emulator recording |
 | Mock API with success and failure responses | `MockUploadApi` behind the `UploadApi` contract, four modes | Tests; in-app mode selector |
-| **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 194 automated tests |
+| **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 216 automated tests, run in CI |
 | **Deliverables:** source code, README, release APK link | This repository, this README, [Release APK](#release-apk) | Both apps build from a fresh clone; the signed APKs were installed and smoke-tested on a device |
 
 ## Project structure
@@ -356,22 +359,41 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 
 ## Testing and verification
 
-**Automated tests: 194.**
+**Automated tests: 216.**
 
 | App | Layer | Tests | What they prove |
 |---|---|---|---|
 | Android | Domain | 33 | Geofence boundary, accuracy and freshness rules, distance maths, use-case outcomes |
-| Android | Persistence | 9 | DataStore round-trips, and corrupt or partial records read as "not set" |
+| Android | Persistence | 14 | Record encoding, and the DataStore repositories on real files: restart survival, and corrupt or partial data reads as "not set" |
 | Android | Presentation | 26 | ViewModel state transitions: permissions, errors, double taps, stale fixes, lifecycle |
+| Android | Compose UI | 12 | `AttendanceScreen` on the JVM through Robolectric: each state's text, button enablement, the replace-office confirmation, and every action a tap reports |
 | Flutter | Domain | 17 | Upload engine outcomes, retry policy, zoom-level selection |
 | Flutter | Data | 36 | Real SQL through `sqflite_common_ffi`, including concurrent claims, restart survival, schema upgrade and orphan cleanup, plus every mock API mode |
 | Flutter | BLoC/Cubit | 41 | Camera lifecycle, capture concurrency, sync triggers and timing, queue streaming |
 | Flutter | Widgets and app wiring | 32 | Screens, the background run result, cross-isolate notifications, the startup failure screen |
+| Flutter | App flows | 5 | The real `TetherCaptureApp` end to end, with fakes only for the camera and network: capture → upload → uploaded; offline → queued → automatic upload once the connection is stable; server error → automatic retry after backoff; Retry now; separate batches |
 
 **Techniques:**
 - **Virtual time** (`fake_async`) for retry timers and connection-stability windows.
 - **`bloc_test`** for state sequences.
-- **Mutation checks** on critical guarantees: removing the atomic claim makes the concurrency test fail with 12 claims for 6 batches, and removing the late-failure guard lets a completed batch regress to failed.
+- **Mutation checks** on critical guarantees. Each one disables the code under test and confirms the suite fails:
+
+  | Code disabled | Result |
+  |---|---|
+  | Atomic claim | The concurrency test fails with 12 claims for 6 batches |
+  | Late-failure guard | A completed batch regresses to failed |
+  | Locked Mark Attendance button | Five UI tests fail |
+  | Reconnect retry | The offline flow test fails |
+- **Coverage:** Tether Capture's suite covers 94% of lines (`flutter test --coverage`).
+
+**Continuous integration** (GitHub Actions). Each app has its own workflow, triggered by changes to that app on pushes to `main` and on pull requests:
+
+| Workflow | Steps |
+|---|---|
+| [Android · Tether Attendance](.github/workflows/android-attendance.yml) | <ol><li>ktlint</li><li>Android Lint</li><li>unit and Compose UI tests</li><li>debug and R8 release builds</li></ol>Test reports and the debug APK are uploaded as artifacts. |
+| [Flutter · Tether Capture](.github/workflows/flutter-capture.yml) | <ol><li>formatting</li><li>`flutter analyze`</li><li>all tests with coverage</li><li>a release APK build</li></ol>The coverage summary and the APK are uploaded. |
+
+CI has no signing secrets, so its release builds fall back to the debug key. Signed APKs are built locally (see [How to run](#how-to-run)).
 
 **Static analysis:**
 - **Android:** ktlint and Android Lint, with 0 issues.
@@ -503,10 +525,10 @@ Release signing reads `android-attendance/keystore.properties` and `flutter-capt
 **Quality checks:**
 
 ```bash
-# Android: formatting, lint, unit tests (68)
+# Android: formatting, lint, unit and Compose UI tests (85)
 cd android-attendance && ./gradlew ktlintCheck lintDebug testDebugUnitTest
 
-# Flutter: formatting, static analysis, unit and widget tests (126)
+# Flutter: formatting, static analysis, unit, widget and app-flow tests (131)
 cd flutter-capture && dart format --set-exit-if-changed lib test && flutter analyze && flutter test
 ```
 

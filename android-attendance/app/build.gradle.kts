@@ -64,6 +64,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        // Robolectric runs Compose UI tests on the JVM and needs the app's resources.
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric's Android 16 (SDK 36) environment reaches into JDK internals.
+        unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }
 
 kotlin {
@@ -92,4 +99,9 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    // Declares the empty activity that Compose UI tests host the screen in.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
