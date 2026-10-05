@@ -14,6 +14,11 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         tools:node="remove" />
+    <!-- Declared by the workmanager plugin for its debug notifications, which
+         this app doesn't enable. Uploads show their state in the app instead. -->
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS"
+        tools:node="remove" />
 
     <!-- Backup and device transfer are off: queued photos are work records
          that belong to this device until uploaded, and a queue restored on

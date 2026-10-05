@@ -52,6 +52,7 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
 | Automatic retry once a stable connection is detected | `SyncCubit` (connection stable for 3 s) and the background worker | Device; emulator recording |
 | Mock API with success and failure responses | `MockUploadApi` behind the `UploadApi` contract, four modes | Tests; in-app mode selector |
 | **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 194 automated tests |
+| **Deliverables:** source code, README, release APK link | This repository, this README, [Release APK](#release-apk) | Both apps build from a fresh clone; the signed APKs were installed and smoke-tested on a device |
 
 ## Project structure
 
@@ -336,7 +337,7 @@ When the user returns from Settings with the cause fixed, the banner clears and 
 | An upload fails (no internet, timeout, server error) | "Failed once" (or "Failed N×") with the error and the next retry time. Photos stay on the device, and **Retry now** is offered |
 | An upload is interrupted by the process dying | The batch returns to the queue with a note, and is retried |
 
-Only the camera permission is requested. The camera plugin's microphone and storage permissions are removed from the merged manifest.
+Only the camera permission is requested. Permissions that plugins declare but the app doesn't use are removed from the merged manifest: the camera plugin's microphone and storage permissions, and the workmanager plugin's notification permission.
 
 ## Mock API
 
@@ -387,6 +388,7 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 | Offline → online | A batch failed in airplane mode and uploaded about 11 s after reconnecting, with no tap |
 | Low bandwidth | A batch timed out in slow-connection mode, kept its photos, and later uploaded automatically |
 | App and worker concurrently | Overlapping runs never processed the same batch twice |
+| Final signed APKs, fresh install | Permission prompts appeared on first launch. The office was saved from a ±34 m fix and a check-in was recorded. A ±70 m fix locked check-in until accuracy recovered. A 3-photo batch was captured and uploaded |
 
 ## Generative AI usage
 
@@ -445,6 +447,7 @@ I used generative AI as an engineering accelerator in two distinct roles, while 
 
 **Prerequisites:**
 - JDK 17+, Android SDK 37 and Flutter 3.44.x (stable).
+- The Android SDK location, either in `ANDROID_HOME` or in a `local.properties` that Android Studio writes the first time it opens the project.
 - An Android device or emulator. A physical device is recommended for GPS and camera.
 
 ```bash
@@ -487,6 +490,15 @@ flutter run
   - To see automatic recovery, enable airplane mode, upload a batch, then disable it.
     - With the app open, the batch uploads a few seconds later.
     - With the app closed, the background worker uploads it once the network is back and its backoff has passed.
+
+**Release builds:**
+
+```bash
+cd android-attendance && ./gradlew assembleRelease    # app/build/outputs/apk/release/
+cd flutter-capture && flutter build apk --release     # build/app/outputs/flutter-apk/
+```
+
+Release signing reads `android-attendance/keystore.properties` and `flutter-capture/android/key.properties`. Both are git-ignored; see the `.example` files next to them. Without them, release builds are signed with the debug key, so a fresh clone still produces installable APKs.
 
 **Quality checks:**
 
@@ -543,9 +555,20 @@ cd flutter-capture && dart format --set-exit-if-changed lib test && flutter anal
 
 ## Release APK
 
-The two tasks are delivered as two apps, so there are two release APKs, one per app. Combining them would mean embedding Flutter in the native app: integration the brief doesn't ask for, and risk that adds nothing to either task.
+| App | Download | Size | Runs on |
+|---|---|---|---|
+| Tether Attendance 1.0.0 | [tether-attendance-v1.0.0.apk](https://github.com/sohailmahmud/tether/releases/download/v1.0.0/tether-attendance-v1.0.0.apk) | 1.4 MB | Android 8.0+ (API 26) with Google Play services |
+| Tether Capture 1.0.0 | [tether-capture-v1.0.0.apk](https://github.com/sohailmahmud/tether/releases/download/v1.0.0/tether-capture-v1.0.0.apk) | 50 MB | Android 7.0+ (API 24) |
 
-_Download links are added with the release build._
+The [v1.0.0 release page](https://github.com/sohailmahmud/tether/releases/tag/v1.0.0) has both APKs and their SHA-256 checksums.
+
+- **Signing:** both APKs are signed with the same release certificate (`CN=Sohail Mahmud, O=Tether`, SHA-256 `ee206ca23f0d2de83af4d4c9dfba2c5b96f4f2c612c716935e1395893247187f`).
+- **Build:**
+  - Tether Attendance is R8-shrunk.
+  - Tether Capture is a universal APK (arm64-v8a, armeabi-v7a, x86_64) so it installs on any device, which accounts for its size.
+- **Install:** open the APK on the device and allow installs from that source when Android asks.
+
+**Packaging decision.** The two tasks are delivered as two apps, so there are two APKs. Combining them would mean embedding Flutter in the native app: integration the brief doesn't ask for, and risk that adds nothing to either task.
 
 ## Known limitations
 
