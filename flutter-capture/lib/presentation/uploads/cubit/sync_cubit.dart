@@ -5,6 +5,7 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../domain/entities/retry_policy.dart';
+import '../../../domain/entities/upload_progress.dart';
 import '../../../domain/repositories/background_sync_scheduler.dart';
 import '../../../domain/repositories/upload_queue_repository.dart';
 import '../../../domain/usecases/process_upload_queue.dart';
@@ -15,6 +16,7 @@ final class SyncState extends Equatable {
     this.isSyncing = false,
     this.lastRun,
     this.lastRunFailed = false,
+    this.progress = const {},
   });
 
   /// Whether the device has a network connection.
@@ -28,20 +30,33 @@ final class SyncState extends Equatable {
   /// and the next trigger tries again.
   final bool lastRunFailed;
 
+  /// Bytes sent so far, by batch id, for the batches this app is uploading
+  /// right now. Uploads run by the background worker happen in another
+  /// isolate and don't appear here.
+  final Map<String, UploadProgress> progress;
+
   SyncState copyWith({
     bool? isOnline,
     bool? isSyncing,
     UploadRunSummary? lastRun,
     bool? lastRunFailed,
+    Map<String, UploadProgress>? progress,
   }) => SyncState(
     isOnline: isOnline ?? this.isOnline,
     isSyncing: isSyncing ?? this.isSyncing,
     lastRun: lastRun ?? this.lastRun,
     lastRunFailed: lastRunFailed ?? this.lastRunFailed,
+    progress: progress ?? this.progress,
   );
 
   @override
-  List<Object?> get props => [isOnline, isSyncing, lastRun, lastRunFailed];
+  List<Object?> get props => [
+    isOnline,
+    isSyncing,
+    lastRun,
+    lastRunFailed,
+    progress,
+  ];
 }
 
 /// Decides when the upload engine runs while the app is open, and hands
@@ -62,7 +77,13 @@ class SyncCubit extends Cubit<SyncState> {
     required this._onlineChanges,
     required this._isOnline,
     this._clock = DateTime.now,
-  }) : super(const SyncState());
+  }) : super(const SyncState()) {
+    _progress = _processQueue.progress.listen(
+      (update) => _emit(
+        state.copyWith(progress: {...state.progress, update.batchId: update}),
+      ),
+    );
+  }
 
   /// How long a connection must stay up before uploads resume, so a
   /// flapping network doesn't set off a burst of failing attempts.
@@ -80,6 +101,7 @@ class SyncCubit extends Cubit<SyncState> {
   final DateTime Function() _clock;
 
   StreamSubscription<bool>? _connectivity;
+  late final StreamSubscription<UploadProgress> _progress;
   Timer? _stableConnectionTimer;
   Timer? _retryTimer;
 
@@ -100,7 +122,10 @@ class SyncCubit extends Cubit<SyncState> {
     var runFailed = false;
     try {
       final summary = await _processQueue(retryFailedNow: retryFailedNow);
-      _emit(state.copyWith(isSyncing: false, lastRun: summary));
+      // Every batch the run took on is now completed or failed.
+      _emit(
+        state.copyWith(isSyncing: false, lastRun: summary, progress: const {}),
+      );
     } on Object catch (error, stack) {
       runFailed = true;
       developer.log(
@@ -109,7 +134,13 @@ class SyncCubit extends Cubit<SyncState> {
         error: error,
         stackTrace: stack,
       );
-      _emit(state.copyWith(isSyncing: false, lastRunFailed: true));
+      _emit(
+        state.copyWith(
+          isSyncing: false,
+          lastRunFailed: true,
+          progress: const {},
+        ),
+      );
     }
     await _scheduleNextRetry(afterError: runFailed);
   }
@@ -177,6 +208,7 @@ class SyncCubit extends Cubit<SyncState> {
     _stableConnectionTimer?.cancel();
     _retryTimer?.cancel();
     await _connectivity?.cancel();
+    await _progress.cancel();
     return super.close();
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tether_capture/domain/entities/retry_policy.dart';
+import 'package:tether_capture/domain/entities/upload_progress.dart';
 import 'package:tether_capture/domain/entities/upload_queue_snapshot.dart';
 import 'package:tether_capture/domain/entities/upload_status.dart';
 import 'package:tether_capture/domain/usecases/process_upload_queue.dart';
@@ -190,6 +191,24 @@ void main() {
       await engine();
 
       expect(queue.lastRecoveryCutoff, now.subtract(RetryPolicy.uploadLease));
+    },
+  );
+
+  test(
+    'reports progress for each batch: zero when claimed, then what the API sends',
+    () async {
+      given(['a']);
+      api.progressSteps = [0.5, 1];
+      final updates = <UploadProgress>[];
+      final subscription = engine.progress.listen(updates.add);
+
+      await engine();
+      await subscription.cancel();
+
+      final total = testBatch(id: 'a').totalBytes;
+      expect(updates.map((u) => u.batchId).toSet(), {'a'});
+      expect(updates.map((u) => u.sentBytes), [0, total ~/ 2, total]);
+      expect(updates.map((u) => u.percent), [0, 50, 100]);
     },
   );
 }

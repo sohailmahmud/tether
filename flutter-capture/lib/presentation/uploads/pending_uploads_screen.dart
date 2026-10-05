@@ -11,8 +11,9 @@ import 'cubit/upload_queue_state.dart';
 import 'widgets/batch_card.dart';
 import 'widgets/mock_server_sheet.dart';
 
-/// Lists submitted batches with their upload status. Batches stay here,
-/// files and all, until the server confirms them.
+/// The Upload Manager: every submitted batch with its upload status and
+/// progress, the connection state, and the mock server mode. Batches stay
+/// here, files and all, until the server confirms them.
 class PendingUploadsScreen extends StatelessWidget {
   const PendingUploadsScreen({super.key});
 
@@ -39,10 +40,11 @@ class PendingUploadsScreen extends StatelessWidget {
       (SyncCubit cubit) => cubit.state.isSyncing,
     );
     final isOnline = context.select((SyncCubit cubit) => cubit.state.isOnline);
+    final progress = context.select((SyncCubit cubit) => cubit.state.progress);
     final mockMode = context.select((MockServerCubit cubit) => cubit.state);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pending Uploads'),
+        title: const Text('Upload Manager'),
         actions: [
           Tooltip(
             message: 'Mock server: ${MockServerSheet.label(mockMode)}',
@@ -53,12 +55,6 @@ class PendingUploadsScreen extends StatelessWidget {
             ),
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(2),
-          child: isSyncing
-              ? const LinearProgressIndicator(minHeight: 2)
-              : const SizedBox(height: 2),
-        ),
       ),
       body: Column(
         children: [
@@ -93,7 +89,10 @@ class PendingUploadsScreen extends StatelessWidget {
                           state: state,
                           showRetry: anyFailed && !isSyncing,
                         )
-                      : BatchCard(batch: batches[index - 1]),
+                      : BatchCard(
+                          batch: batches[index - 1],
+                          progress: progress[batches[index - 1].id],
+                        ),
                 );
               },
             ),
@@ -157,21 +156,34 @@ class _Summary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final unfinished = state.queue.unfinished;
     final photos = unfinished.fold(0, (sum, batch) => sum + batch.photoCount);
-    final text = unfinished.isEmpty
-        ? 'All batches uploaded'
-        : '${unfinished.length == 1 ? '1 batch' : '${unfinished.length} batches'}'
-              ' · ${photos == 1 ? '1 photo' : '$photos photos'} waiting';
     return Row(
       children: [
         Expanded(
-          child: Text(
-            text.toUpperCase(),
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              letterSpacing: 0.8,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // The brief's "Pending Uploads" list, under the Upload Manager.
+              Text(
+                unfinished.isEmpty ? 'ALL BATCHES UPLOADED' : 'PENDING UPLOADS',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  letterSpacing: 0.8,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              if (unfinished.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '${unfinished.length == 1 ? '1 batch' : '${unfinished.length} batches'}'
+                  ' · ${photos == 1 ? '1 photo' : '$photos photos'}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         // A convenience only: failed batches are also retried automatically.

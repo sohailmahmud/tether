@@ -4,14 +4,18 @@ import 'package:flutter/material.dart';
 
 import '../../../domain/entities/upload_batch.dart';
 import '../../../domain/entities/upload_item.dart';
+import '../../../domain/entities/upload_progress.dart';
 import '../../../domain/entities/upload_status.dart';
 import '../upload_formatting.dart';
 
 /// One queued batch: size, time, upload status and its first photos.
 class BatchCard extends StatelessWidget {
-  const BatchCard({super.key, required this.batch});
+  const BatchCard({super.key, required this.batch, this.progress});
 
   final UploadBatch batch;
+
+  /// Bytes sent so far, when this app is the one uploading the batch.
+  final UploadProgress? progress;
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +63,7 @@ class BatchCard extends StatelessWidget {
               _ThumbnailStrip(items: batch.items),
             if (batch.status == UploadStatus.uploading) ...[
               const SizedBox(height: 12),
-              const LinearProgressIndicator(),
+              _UploadProgressBar(progress: progress),
             ],
             if (batch.status == UploadStatus.failed) ...[
               const SizedBox(height: 8),
@@ -95,6 +99,41 @@ String _retryText(BuildContext context, DateTime? nextAttemptAt) {
     context,
   ).formatTimeOfDay(TimeOfDay.fromDateTime(nextAttemptAt));
   return 'Next automatic retry at $time, or sooner when the connection returns.';
+}
+
+/// Determinate while this app uploads the batch. Indeterminate when the
+/// background worker does, because its progress lives in another isolate.
+class _UploadProgressBar extends StatelessWidget {
+  const _UploadProgressBar({required this.progress});
+
+  final UploadProgress? progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = this.progress;
+    if (progress == null) {
+      return const LinearProgressIndicator(semanticsLabel: 'Upload progress');
+    }
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LinearProgressIndicator(
+          value: progress.fraction,
+          semanticsLabel: 'Upload progress',
+          semanticsValue: '${progress.percent}%',
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '${progress.percent}% · ${formatBytes(progress.sentBytes)} of '
+          '${formatBytes(progress.totalBytes)}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// Replaces the thumbnails once uploaded: the files have been deleted.

@@ -15,6 +15,8 @@ void main() {
   late List<Duration> waits;
   late MockUploadApi api;
 
+  Duration waited() => waits.fold(Duration.zero, (sum, wait) => sum + wait);
+
   setUp(() {
     mode = MockServerMode.normal;
     online = true;
@@ -34,7 +36,27 @@ void main() {
     final result = await api.uploadBatch(batch);
 
     expect(result, isA<UploadSucceeded>());
-    expect(waits.single, const Duration(milliseconds: 750)); // 1.5 MB at 2 MB/s
+    expect(waited(), const Duration(milliseconds: 750)); // 1.5 MB at 2 MB/s
+  });
+
+  test('reports progress about every 100 ms, ending with every byte', () async {
+    final sent = <int>[];
+
+    await api.uploadBatch(
+      batch,
+      onProgress: (sentBytes, totalBytes) {
+        expect(totalBytes, batch.totalBytes);
+        sent.add(sentBytes);
+      },
+    );
+
+    expect(sent, hasLength(8), reason: '750 ms in steps of at most 100 ms');
+    expect(sent, orderedEquals([...sent]..sort()), reason: 'never goes back');
+    expect(sent.last, batch.totalBytes);
+    expect(
+      waits.every((wait) => wait <= MockUploadApi.progressInterval),
+      isTrue,
+    );
   });
 
   test('offline: fails as no connection, whatever the mode', () async {
@@ -51,7 +73,20 @@ void main() {
     final result = await api.uploadBatch(batch) as UploadFailed;
 
     expect(result.reason, UploadFailureReason.timeout);
-    expect(waits.single, MockUploadApi.timeout);
+    expect(waited(), MockUploadApi.timeout);
+  });
+
+  test('a timed-out upload reports only what got through', () async {
+    mode = MockServerMode.slowConnection;
+    var sent = 0;
+
+    await api.uploadBatch(
+      batch,
+      onProgress: (sentBytes, _) => sent = sentBytes,
+    );
+
+    // 8 s at about 16 KB/s of a 1.5 MB batch.
+    expect(sent, MockUploadApi.slowBytesPerSecond * 8);
   });
 
   test('server error: fails with a server error', () async {
@@ -80,10 +115,11 @@ void main() {
       mode =
           MockServerMode.serverError; // even a failing server knows it has it
 
+      final transfers = waits.length;
       final again = await api.uploadBatch(batch) as UploadSucceeded;
 
       expect(again.receiptId, first.receiptId);
-      expect(waits, hasLength(1), reason: 'no second transfer');
+      expect(waits, hasLength(transfers), reason: 'no second transfer');
     },
   );
 

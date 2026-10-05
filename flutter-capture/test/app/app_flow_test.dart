@@ -90,7 +90,7 @@ void main() {
       expect(find.bySemanticsLabel('2 photos in this batch'), findsOneWidget);
       await uploadBatch(tester, 2);
 
-      expect(find.text('Pending Uploads'), findsOneWidget);
+      expect(find.text('Upload Manager'), findsOneWidget);
       expect(find.text('2 photos'), findsOneWidget);
       expect(find.text('Uploaded'), findsOneWidget);
       expect(find.text('ALL BATCHES UPLOADED'), findsOneWidget);

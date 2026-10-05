@@ -32,8 +32,11 @@ void main() {
   void withCubit(
     void Function(FakeAsync async, SyncCubit cubit) body, {
     bool onlineAtLaunch = true,
+    void Function()? beforeStart,
   }) {
     fakeAsync((async) {
+      // Inside the fake zone, so futures it creates (e.g. gates) resume here.
+      beforeStart?.call();
       DateTime now() => launch.add(async.elapsed);
       final cubit = SyncCubit(
         processQueue: ProcessUploadQueue(queue: queue, api: api, clock: now),
@@ -232,6 +235,23 @@ void main() {
       unawaited(cubit.sync(retryFailedNow: true));
       async.flushMicrotasks();
       expect(api.uploadedIds, ['f']);
+    });
+  });
+
+  test('exposes upload progress while a batch uploads, then clears it', () {
+    queue.queue = UploadQueueSnapshot(batches: [testBatch(id: 'a')]);
+    api.progressSteps = [0.65];
+
+    withCubit(beforeStart: () => api.gate = Completer<void>(), (async, cubit) {
+      final progress = cubit.state.progress['a']!;
+      expect(progress.percent, 65);
+      expect(progress.totalBytes, testBatch(id: 'a').totalBytes);
+
+      api.gate!.complete();
+      async.flushMicrotasks();
+
+      expect(cubit.state.progress, isEmpty);
+      expect(queue.queue.batches.single.status, UploadStatus.completed);
     });
   });
 }
