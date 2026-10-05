@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:equatable/equatable.dart';
 
 import '../entities/retry_policy.dart';
 import '../entities/upload_batch.dart';
+import '../entities/upload_progress.dart';
 import '../entities/upload_result.dart';
 import '../repositories/upload_api.dart';
 import '../repositories/upload_queue_repository.dart';
@@ -52,6 +55,12 @@ class ProcessUploadQueue {
   final UploadQueueRepository _queue;
   final UploadApi _api;
   final DateTime Function() _clock;
+
+  final _progress = StreamController<UploadProgress>.broadcast();
+
+  /// Bytes sent for each batch this engine uploads, as they go: 0 when the
+  /// batch is claimed, then whatever the API reports.
+  Stream<UploadProgress> get progress => _progress.stream;
 
   Future<UploadRunSummary>? _running;
   bool _passRequested = false;
@@ -121,8 +130,20 @@ class ProcessUploadQueue {
   /// counts as a failed attempt, so the batch is kept and retried rather than
   /// left stuck in "uploading".
   Future<UploadResult> _upload(UploadBatch batch) async {
+    void report(int sentBytes, int totalBytes) {
+      if (_progress.isClosed) return;
+      _progress.add(
+        UploadProgress(
+          batchId: batch.id,
+          sentBytes: sentBytes,
+          totalBytes: totalBytes,
+        ),
+      );
+    }
+
+    report(0, batch.totalBytes);
     try {
-      return await _api.uploadBatch(batch);
+      return await _api.uploadBatch(batch, onProgress: report);
     } on Object catch (_) {
       return const UploadFailed(
         UploadFailureReason.serverError,
@@ -130,4 +151,7 @@ class ProcessUploadQueue {
       );
     }
   }
+
+  /// Releases the progress stream. The app never needs this; tests do.
+  Future<void> close() => _progress.close();
 }

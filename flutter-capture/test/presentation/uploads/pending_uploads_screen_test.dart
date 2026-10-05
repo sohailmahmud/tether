@@ -85,7 +85,8 @@ void main() {
       ),
     );
 
-    expect(find.text('3 BATCHES · 10 PHOTOS WAITING'), findsOneWidget);
+    expect(find.text('PENDING UPLOADS'), findsOneWidget);
+    expect(find.text('3 batches · 10 photos'), findsOneWidget);
     expect(find.text('Waiting to upload'), findsOneWidget);
     expect(find.text('Failed 2×'), findsOneWidget);
     expect(find.text('No internet connection.'), findsOneWidget);
@@ -132,6 +133,57 @@ void main() {
     ], reason: 'retried despite its 10-minute backoff');
     expect(find.text('Uploaded'), findsOneWidget);
     expect(find.text('Retry now'), findsNothing);
+  });
+
+  testWidgets(
+    'is titled Upload Manager and shows determinate progress while uploading',
+    (tester) async {
+      api
+        ..progressSteps = [0.65]
+        ..gate = Completer<void>();
+      await pumpScreen(
+        tester,
+        UploadQueueSnapshot(batches: [testBatch(id: 'u', photos: 3)]),
+      );
+      expect(find.text('Upload Manager'), findsOneWidget);
+
+      unawaited(
+        tester
+            .element(find.byType(PendingUploadsScreen))
+            .read<SyncCubit>()
+            .sync(),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // 65% of three 512 KB photos.
+      expect(find.text('65% · 998 KB of 1.5 MB'), findsOneWidget);
+      final bar = tester.widget<LinearProgressIndicator>(
+        find.byType(LinearProgressIndicator),
+      );
+      expect(bar.value, closeTo(0.65, 0.001));
+      expect(bar.semanticsValue, '65%');
+
+      api.gate!.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Uploaded'), findsOneWidget);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+    },
+  );
+
+  testWidgets('a batch the background worker is uploading shows an '
+      'indeterminate bar', (tester) async {
+    await pumpScreen(
+      tester,
+      UploadQueueSnapshot(
+        batches: [testBatch(id: 'w', status: UploadStatus.uploading)],
+      ),
+    );
+
+    final bar = tester.widget<LinearProgressIndicator>(
+      find.byType(LinearProgressIndicator),
+    );
+    expect(bar.value, isNull);
   });
 
   testWidgets('the mock server mode can be changed from the screen', (

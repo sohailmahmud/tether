@@ -29,6 +29,9 @@ class MockUploadApi implements UploadApi {
   /// so a single 1080p photo already takes longer than [timeout].
   static const slowBytesPerSecond = 16 * 1024;
 
+  /// How often upload progress is reported during a transfer.
+  static const progressInterval = Duration(milliseconds: 100);
+
   final Future<MockServerMode> Function() _mode;
   final Future<bool> Function() _isOnline;
   final Random _random;
@@ -39,7 +42,10 @@ class MockUploadApi implements UploadApi {
   final _received = <String, String>{};
 
   @override
-  Future<UploadResult> uploadBatch(UploadBatch batch) async {
+  Future<UploadResult> uploadBatch(
+    UploadBatch batch, {
+    UploadProgressCallback? onProgress,
+  }) async {
     if (!await _isOnline()) {
       await _wait(const Duration(milliseconds: 300));
       return const UploadFailed(
@@ -48,19 +54,26 @@ class MockUploadApi implements UploadApi {
       );
     }
     final alreadyStored = _received[batch.id];
-    if (alreadyStored != null) return UploadSucceeded(receiptId: alreadyStored);
+    if (alreadyStored != null) {
+      onProgress?.call(batch.totalBytes, batch.totalBytes);
+      return UploadSucceeded(receiptId: alreadyStored);
+    }
 
     switch (await _mode()) {
       case MockServerMode.normal:
-        await _wait(_transferTime(batch, normalBytesPerSecond));
+        await _send(
+          batch,
+          _transferTime(batch, normalBytesPerSecond),
+          onProgress,
+        );
         return _store(batch);
       case MockServerMode.slowConnection:
         final transfer = _transferTime(batch, slowBytesPerSecond);
         if (transfer <= timeout) {
-          await _wait(transfer);
+          await _send(batch, transfer, onProgress);
           return _store(batch);
         }
-        await _wait(timeout);
+        await _send(batch, transfer, onProgress, stopAfter: timeout);
         return const UploadFailed(
           UploadFailureReason.timeout,
           'Timed out: the connection is too slow.',
@@ -74,15 +87,40 @@ class MockUploadApi implements UploadApi {
       case MockServerMode.unstable:
         final transfer = _transferTime(batch, normalBytesPerSecond);
         if (_random.nextBool()) {
-          await _wait(transfer);
+          await _send(batch, transfer, onProgress);
           return _store(batch);
         }
         // Drops part-way through the transfer.
-        await _wait(transfer * 0.5);
+        await _send(batch, transfer, onProgress, stopAfter: transfer * 0.5);
         return const UploadFailed(
           UploadFailureReason.timeout,
           'The connection dropped during the upload.',
         );
+    }
+  }
+
+  /// Simulates sending [batch] at a speed where all of it takes
+  /// [fullTransfer], giving up after [stopAfter] if set. Reports the bytes
+  /// sent about every [progressInterval].
+  Future<void> _send(
+    UploadBatch batch,
+    Duration fullTransfer,
+    UploadProgressCallback? onProgress, {
+    Duration? stopAfter,
+  }) async {
+    final total = batch.totalBytes;
+    final end = stopAfter ?? fullTransfer;
+    final steps = max(
+      1,
+      (end.inMicroseconds / progressInterval.inMicroseconds).ceil(),
+    );
+    var elapsed = 0;
+    for (var step = 1; step <= steps; step++) {
+      // Step boundaries in whole microseconds, so the waits add up exactly.
+      final next = end.inMicroseconds * step ~/ steps;
+      await _wait(Duration(microseconds: next - elapsed));
+      elapsed = next;
+      onProgress?.call(total * elapsed ~/ fullTransfer.inMicroseconds, total);
     }
   }
 

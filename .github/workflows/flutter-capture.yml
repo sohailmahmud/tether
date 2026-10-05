@@ -1,0 +1,108 @@
+name: Flutter · Tether Capture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flutter-capture/**"
+      - ".github/workflows/flutter-capture.yml"
+  pull_request:
+    paths:
+      - "flutter-capture/**"
+      - ".github/workflows/flutter-capture.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.44.6"
+
+jobs:
+  verify:
+    name: Format, analyze and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: flutter-capture
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: SQLite for the real-SQL repository tests
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libsqlite3-dev
+
+      - run: flutter pub get
+
+      - name: Formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit, widget and app-flow tests
+        run: flutter test --coverage --reporter=expanded
+
+      - name: Coverage summary
+        run: |
+          awk -F: '/^LF:/ {found += $2} /^LH:/ {hit += $2}
+            END {printf "### Tether Capture\n| Lines covered | Total lines | Coverage |\n|---|---|---|\n| %d | %d | %.1f%% |\n", hit, found, 100 * hit / found}' \
+            coverage/lcov.info >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: flutter-capture-coverage
+          path: flutter-capture/coverage/lcov.info
+
+  build:
+    name: Build Android APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: flutter-capture
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v4
+
+      - name: Install SDK platform 37
+        run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - run: flutter pub get
+
+      - name: Build release APK
+        # No signing secrets in CI: the release build falls back to the debug key,
+        # which still proves that the release (AOT) build works.
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: tether-capture-apk
+          path: flutter-capture/build/app/outputs/flutter-apk/app-release.apk

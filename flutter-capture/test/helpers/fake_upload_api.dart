@@ -15,6 +15,9 @@ class FakeUploadApi implements UploadApi {
   /// When set, uploadBatch throws it (a bug, not a network failure).
   Object? throws;
 
+  /// Fractions of the batch reported as sent, in order, before [gate].
+  List<double> progressSteps = [];
+
   final List<String> uploadedIds = [];
 
   static const noConnection = UploadFailed(
@@ -27,8 +30,14 @@ class FakeUploadApi implements UploadApi {
   );
 
   @override
-  Future<UploadResult> uploadBatch(UploadBatch batch) async {
+  Future<UploadResult> uploadBatch(
+    UploadBatch batch, {
+    UploadProgressCallback? onProgress,
+  }) async {
     uploadedIds.add(batch.id);
+    for (final fraction in progressSteps) {
+      onProgress?.call((batch.totalBytes * fraction).round(), batch.totalBytes);
+    }
     await gate?.future;
     final error = throws;
     if (error != null) throw error;

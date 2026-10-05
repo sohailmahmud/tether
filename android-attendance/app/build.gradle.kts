@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -5,6 +6,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ktlint)
 }
+
+// Release signing comes from keystore.properties, which stays out of git (see
+// keystore.properties.example). Without it, release builds are signed with the
+// debug key, so anyone can still build and install one.
+val keystoreProperties =
+    Properties().apply {
+        val file = rootProject.file("keystore.properties")
+        if (file.exists()) file.inputStream().use(::load)
+    }
 
 android {
     namespace = "com.tether.attendance"
@@ -22,8 +32,21 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        if (keystoreProperties.isNotEmpty()) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig =
+                signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -40,6 +63,13 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    testOptions {
+        // Robolectric runs Compose UI tests on the JVM and needs the app's resources.
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric's Android 16 (SDK 36) environment reaches into JDK internals.
+        unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
     }
 }
 
@@ -69,4 +99,9 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    // Declares the empty activity that Compose UI tests host the screen in.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
