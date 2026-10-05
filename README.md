@@ -28,7 +28,7 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
   <img src="docs/screenshots/uploads-states.png" width="240" alt="Upload Manager with a batch uploading at 14%, a failed batch and an uploaded batch">
 </p>
 
-**Contents:** [Highlights](#highlights) · [Principles](#engineering-principles) · [Requirements](#requirements-traceability) · [Structure](#project-structure) · [Architecture](#architecture) · [BLoC/Cubit classes](#main-bloccubit-classes) · [Decisions](#architecture-decisions) · [Persistence](#local-persistence) · [Sync](#sync-strategy) · [Errors](#error-handling) · [Mock API](#mock-api) · [Testing](#testing-and-verification) · [AI usage](#generative-ai-usage) · [How to run](#how-to-run) · [Screenshots](#screenshots) · [Release APK](#release-apk) · [Limitations](#known-limitations)
+**Contents:** [Highlights](#highlights) · [Principles](#engineering-principles) · [Requirements](#requirements-traceability) · [Assumptions](#assumptions-and-interpretations) · [Structure](#project-structure) · [Approach](#architectural-approach) · [Architecture](#architecture) · [BLoC/Cubit classes](#main-bloccubit-classes) · [Decisions](#architecture-decisions) · [Persistence](#local-persistence) · [Sync](#sync-strategy) · [Errors](#error-handling) · [Mock API](#mock-api) · [Configuration](#configuration-reference) · [Dependencies](#dependencies) · [Testing](#testing-and-verification) · [AI usage](#generative-ai-usage) · [How to run](#how-to-run) · [Reviewer guide](#reviewer-guide) · [Screenshots](#screenshots) · [Release APK](#release-apk) · [Delivery](#delivery-process) · [Limitations](#known-limitations)
 
 ## Highlights
 
@@ -56,7 +56,8 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
 | **Responsiveness** | GPS and camera are active only while visible; hardware access is serialized; long operations report determinate progress |
 | **Security and privacy** | Least-privilege permissions, cloud backup disabled, no secrets in version control, release signing outside the repository |
 | **Testability** | A framework-free domain layer, explicit composition roots, and fakes only at the hardware, network and storage edges |
-| **Operability** | CI gates for formatting, lint and analysis, tests and release builds; state-transition logging in debug builds only |
+| **Accessibility** | Labelled controls (shutter, zoom levels, queue badge, lock state); polite live regions for status banners; upload progress exposed to assistive technology as a progress value |
+| **Operability** | CI gates for formatting, lint and analysis, tests and release builds. State-transition logging is debug-only; release warnings carry error codes and exceptions, never coordinates or photo data |
 
 ## Requirements traceability
 
@@ -76,6 +77,22 @@ The name reflects what both apps do: attendance is tethered to a 50 m radius aro
 | Mock API with success and failure responses | `MockUploadApi` behind the `UploadApi` contract, four modes | Tests; in-app mode selector |
 | **General:** BLoC/Cubit, Kotlin Flow, layered architecture, local storage, graceful permission and hardware failures | [Architecture](#architecture), [Persistence](#local-persistence), [Error handling](#error-handling) | 222 automated tests, run in CI |
 | **Deliverables:** source code, README, release APK link | This repository, this README, [Release APK](#release-apk) | Both apps build from a fresh clone; the signed APKs were installed and smoke-tested on a device |
+
+## Assumptions and interpretations
+
+Where the brief is silent, I made deliberate, documented decisions. None of them is presented as a requirement of the assessment.
+
+| The brief says | Interpretation | Why |
+|---|---|---|
+| "High accuracy" | A fix must be ±50 m or better, to check in and to set the office | A fix less certain than the 50 m geofence can't tell inside from outside ([ADR-0003](docs/adr/0003-geofence-eligibility-policy.md)) |
+| "Real-time distance indicator" | Updates every 2 s while the screen is visible; a fix older than 15 s no longer counts | Live enough while walking, without running GPS in the background |
+| "A stable connection is detected" | A connection that stays up for 3 s | Absorbs flapping networks without delaying recovery noticeably |
+| "Background worker (e.g. workmanager) to monitor connectivity" | A one-off WorkManager task with a network-connected constraint, kept scheduled while work remains | The platform-correct way to run work when a network appears ([ADR-0006](docs/adr/0006-sync-orchestration.md)) |
+| "Automatically retry" | Unlimited retries with exponential backoff (30 s doubling, capped at 15 min in-app) | Photos must never be dropped; backoff protects a failing server and the battery |
+| "Mock API responses for success and failed" | A mock server with four selectable modes behind the real API contract | Every failure path can be demonstrated end to end ([ADR-0007](docs/adr/0007-api-boundary-and-mock-server.md)) |
+| "Pending Uploads" list | The **Upload Manager** screen: pending, uploading, failed and recently uploaded batches, with progress | Users see what is waiting and what has already been confirmed |
+| Reference UI: "Available 09:00 AM – 10:30 AM" | Not implemented | No check-in window appears in the requirements |
+| Release APK link | Two APKs, one per app | The tasks are separate apps ([ADR-0001](docs/adr/0001-two-applications-one-per-task.md)) |
 
 ## Project structure
 
@@ -107,11 +124,23 @@ tether/
 └── .github/workflows/           CI for each app
 ```
 
-**Approach.**
-- **Two independent apps,** one per task, each with its own build, CI workflow and release artifact ([ADR-0001](docs/adr/0001-two-applications-one-per-task.md)).
-- **The same layered shape in both:** presentation → domain → data.
-- **Business rules in a framework-free domain layer.**
-- **One-way state.** On Android, a `StateFlow` in a ViewModel; on Flutter, one Cubit per concern ([ADR-0002](docs/adr/0002-unidirectional-state-management.md)). Screens render state and dispatch intents, nothing more.
+The Android tree follows the master plan's suggested layout, with two deliberate simplifications:
+- Each data source has exactly one repository, so repositories live next to their sources instead of in a separate `repository/` package.
+- There is no `navigation/` package, because the app has a single screen.
+
+## Architectural approach
+
+Both apps apply the same architectural model, expressed in each platform's idiom.
+
+| Concern | Tether Attendance (Android) | Tether Capture (Flutter) |
+|---|---|---|
+| **Style and dependency rule** | Layered: Compose → ViewModel → use cases → repositories → data sources. Dependencies point inward, and the domain has no Android imports | Layered, with ports and adapters: the domain defines contracts (`CameraRepository`, `UploadQueueRepository`, `UploadApi`, `BackgroundSyncScheduler`) that the data layer implements. The domain is pure Dart |
+| **State and data flow** | Unidirectional: storage and location flows → one `StateFlow<AttendanceUiState>` → a stateless screen; intents flow back as `AttendanceActions` | Unidirectional: repositories stream into Cubits → immutable `Equatable` states → widgets; intents are Cubit method calls |
+| **Concurrency** | Structured concurrency in `viewModelScope`. `flatMapLatest` and `transformLatest` cancel stale work; `conflate` drops outdated fixes; in-flight jobs guard against double taps | Two isolates (UI and WorkManager) share one native SQLite connection. Queue writes are serialized in-process, camera operations run strictly in order, and overlapping sync triggers join one run |
+| **Error model** | Expected failures are typed results (`LocationResult`, `SetOfficeLocationResult`, `MarkAttendanceResult`); I/O exceptions are caught at the use-case boundary | Expected failures are typed results (`UploadResult`) or domain exceptions mapped to states (`CameraFailure`, `UploadQueueException`). Unexpected errors still produce a safe state, such as a failed attempt or a released shutter |
+| **Lifecycle** | `WhileSubscribed(5_000)` + `collectAsStateWithLifecycle`: GPS runs only while the screen is visible, and survives rotation | The camera is released when the app goes inactive or another screen covers it, and is restored with its zoom; sync work outlives the UI through WorkManager |
+| **Offline-first** | Office and last check-in are read from local storage; no network needed | The queue is the system of record; the UI renders persisted state, never in-memory assumptions |
+| **Composition** | `AppContainer` composition root ([ADR-0008](docs/adr/0008-composition-roots-and-manual-di.md)) | `main.dart` + `SyncDependencies`, shared by the app and the worker |
 
 ## Architecture
 
@@ -160,13 +189,13 @@ flowchart LR
 
 **Geofence policy (`AttendancePolicy`)** ([ADR-0003](docs/adr/0003-geofence-eligibility-policy.md))
 
-| Rule | Value | Rationale |
-|---|---|---|
-| Geofence radius | 50 m, inclusive | Assessment brief |
-| Distance | Haversine on a spherical Earth (under 0.3 m error at 50 m) | Accurate at this scale without a geodesy dependency |
-| Minimum accuracy | ±50 m or better, to check in **and** to set the office | A fix less certain than the geofence can't tell inside from outside, and an imprecise office would shift the whole geofence |
-| Maximum fix age | 15 s; older fixes show "No GPS signal" and are refused at check-in | Updates arrive every 2 s, so 15 s of silence means the signal is lost and the user may have moved |
-| Displayed distance | Rounded **up** to whole metres | The label always agrees with the rule: 50.0 m shows "50m" (in range), 50.2 m shows "51m" (out) |
+| Rule | Value | Source | Rationale |
+|---|---|---|---|
+| Geofence radius | 50 m, inclusive | **Assessment brief** | — |
+| Distance | Haversine on a spherical Earth (under 0.3 m error at 50 m) | Design decision | Accurate at this scale without a geodesy dependency |
+| Minimum accuracy | ±50 m or better, to check in **and** to set the office | **Design decision**; the brief asks for "high accuracy" without a number | A fix less certain than the geofence can't tell inside from outside, and an imprecise office would shift the whole geofence |
+| Maximum fix age | 15 s; older fixes show "No GPS signal" and are refused at check-in | Design decision | Updates arrive every 2 s, so 15 s of silence means the signal is lost and the user may have moved |
+| Displayed distance | Rounded **up** to whole metres | Design decision | The label always agrees with the rule: 50.0 m shows "50m" (in range), 50.2 m shows "51m" (out) |
 
 ### Tether Capture: Flutter with BLoC/Cubit
 
@@ -207,6 +236,8 @@ flowchart LR
   - upload queue entities and their status model
   - the `ProcessUploadQueue` engine with its `RetryPolicy` and `UploadProgress`
   - the contracts the data layer implements
+
+  The upload engine is the only use case, because it is the only workflow that orchestrates several collaborators: the queue, the API, the clock and the retry policy. Camera and queue operations map one-to-one onto repository calls, so wrapping them in pass-through use cases would add classes without adding responsibility.
 - **Data:** the `camera` and `permission_handler` plugins, the SQLite queue and photo store, the mock API, connectivity (`connectivity_plus`) and WorkManager scheduling (`workmanager`).
 - **Presentation:** two screens (the camera and the Upload Manager) and four Cubits. Widgets hold no business logic. The demo-only `MockServerCubit` is left out of the diagram.
 - **Composition root** (`main.dart`, `app/`):
@@ -388,6 +419,55 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 | Server error | Fails with 503 Service Unavailable |
 | Unstable connection | About half of the uploads drop part-way |
 
+## Configuration reference
+
+Behavioural constants live next to the rule they parameterise, never in UI code.
+
+| Setting | Value | Defined in |
+|---|---|---|
+| Geofence radius | 50 m | `AttendancePolicy.RADIUS_METERS` |
+| Minimum fix accuracy | ±50 m | `AttendancePolicy.MAX_ACCURACY_METERS` |
+| Maximum fix age | 15 s | `AttendancePolicy.MAX_FIX_AGE_MILLIS` |
+| Location update interval (fastest) | 2 s (1 s) | `FusedLocationRepository` |
+| Office fix timeout | 30 s | `FusedLocationRepository` |
+| UI state keep-alive after the screen leaves | 5 s | `AttendanceViewModel` (`WhileSubscribed`) |
+| Retry backoff | 30 s, doubling, capped at 15 min | `RetryPolicy` |
+| Upload lease (crash recovery) | 5 min | `RetryPolicy.uploadLease` |
+| Stable-connection window | 3 s | `SyncCubit.stableConnectionDelay` |
+| Pause after an unexpected storage error | 30 s | `SyncCubit.errorRetryDelay` |
+| Background worker backoff | Exponential from 30 s | `WorkmanagerSyncScheduler` |
+| Mock request timeout | 8 s | `MockUploadApi.timeout` |
+| Mock bandwidth (normal / slow) | About 2 MB/s / 16 KB/s | `MockUploadApi` |
+| Progress reporting interval (mock) | 100 ms | `MockUploadApi.progressInterval` |
+| Photo resolution | 1080p JPEG | `PluginCameraRepository` |
+| SQLite busy timeout | 5 s | `UploadQueueDatabase` |
+
+## Dependencies
+
+Dependencies are stable, widely adopted and kept to what each app needs. Versions are pinned through the Gradle version catalog and `pubspec.lock`.
+
+**Tether Attendance**
+
+| Library | Purpose | Why |
+|---|---|---|
+| Play services location (`FusedLocationProviderClient`) | Fixes with accuracy and time | Best accuracy and battery behaviour on Android; required by the master plan |
+| Preferences DataStore | Office and last check-in | Asynchronous, transactional, Flow-native; replaces SharedPreferences |
+| `kotlinx-coroutines-play-services` | `await()` on Play services tasks, with cancellation | Location requests are cancelled when the screen closes |
+| Lifecycle (`runtime-compose`, `viewmodel-compose`) | `collectAsStateWithLifecycle`, ViewModel | Lifecycle-aware collection |
+| *Test:* Robolectric, Compose UI test, `kotlinx-coroutines-test` | JVM UI tests and virtual time | Compose UI tests run in CI without an emulator |
+
+**Tether Capture**
+
+| Library | Purpose | Why |
+|---|---|---|
+| `flutter_bloc`, `equatable` | Cubits and value-equal states | Required by the brief; Equatable makes state changes testable |
+| `camera` | Preview, zoom, focus, capture | First-party plugin (CameraX on Android) |
+| `permission_handler` | Camera permission, including "permanently denied" | The camera plugin can't tell denied from permanently denied |
+| `sqflite`, `path`, `path_provider` | The upload queue and photo storage | Transactions and multi-isolate safety ([ADR-0004](docs/adr/0004-sqlite-upload-queue.md)) |
+| `workmanager` | Background worker | WorkManager is Android's supported scheduler for deferrable, constrained work |
+| `connectivity_plus` | Connectivity changes in the foreground | Drives the stable-reconnection trigger |
+| *Test:* `bloc_test`, `fake_async`, `sqflite_common_ffi` | Cubit sequences, virtual time, real SQL on the host | Deterministic tests for timing and storage |
+
 ## Testing and verification
 
 **Automated tests: 222.**
@@ -403,6 +483,61 @@ The brief provides no backend. `MockUploadApi` implements the `UploadApi` contra
 | Flutter | BLoC/Cubit | 42 | Camera lifecycle, capture concurrency, sync triggers and timing, upload progress, queue streaming |
 | Flutter | Widgets and app wiring | 34 | Screens (including determinate and indeterminate progress), the background run result, cross-isolate notifications, the startup failure screen |
 | Flutter | App flows | 5 | The real `TetherCaptureApp` end to end, with fakes only for the camera and network: capture → upload → uploaded; offline → queued → automatic upload once the connection is stable; server error → automatic retry after backoff; Retry now; separate batches |
+
+**Master plan test matrices.** Every scenario in the plan's Android and Flutter test matrices, with how it was verified. A dash means the scenario was not verified that way.
+
+<details>
+<summary><b>Android test matrix</b> (16 scenarios)</summary>
+
+| Scenario | Automated | Device or emulator |
+|---|---|---|
+| Permission granted | ViewModel tests | ✓ Device |
+| Permission denied / permanently denied | ViewModel and Compose UI tests | ✓ Device |
+| GPS disabled | ViewModel and Compose UI tests | ✓ Emulator |
+| Location unavailable (no fix) | Use-case and Compose UI tests | ✓ Device |
+| Office location not configured | Compose UI test | ✓ Emulator |
+| Office location configured | Use-case and DataStore tests | ✓ Device and emulator |
+| User outside 50 m | Policy and Compose UI tests | ✓ Emulator (120 m) |
+| User near the boundary | Boundary tests (49.99 m / 50.01 m) | ✓ Device (50 m / 51 m) |
+| User inside 50 m | Policy, use-case and Compose UI tests | ✓ Device and emulator |
+| Poor location accuracy | Policy, use-case and Compose UI tests | ✓ Device (±70 m) |
+| App backgrounded | ViewModel test (tracking stops after 5 s) | ✓ Device (location requests stopped) |
+| App resumed | ViewModel tests | ✓ Device |
+| App restarted | DataStore restart tests | ✓ Device |
+| Saved office location persists | DataStore tests | ✓ Device |
+| Real-time distance updates | ViewModel test | ✓ Device and emulator |
+| Attendance blocked outside the allowed range | Use-case and Compose UI tests | ✓ Emulator |
+
+</details>
+
+<details>
+<summary><b>Flutter test matrix</b> (21 scenarios)</summary>
+
+| Scenario | Automated | Device or emulator |
+|---|---|---|
+| Camera permission denied | Cubit and widget tests | ✓ Device |
+| Camera permission granted | Cubit tests | ✓ Device |
+| Camera initialization failure | Cubit and widget tests | — |
+| Zoom buttons | Widget tests | ✓ Device |
+| Zoom slider | Widget test | — |
+| Pinch zoom | Widget test | — |
+| Tap focus | Cubit and widget tests | ✓ Device |
+| Focus indicator | Widget test | ✓ Device |
+| Capture image | Cubit, repository and app-flow tests | ✓ Device |
+| Multiple images | Repository and app-flow tests | ✓ Device |
+| Multiple batches | Repository and app-flow tests | ✓ Device and emulator |
+| Pending uploads | Widget and app-flow tests | ✓ Device and emulator |
+| API success | Engine, mock API and app-flow tests | ✓ Device |
+| API failure | Engine, mock API and app-flow tests | ✓ Device (server error) |
+| No internet | Engine, Cubit and app-flow tests | ✓ Device (airplane mode) |
+| Low or unstable connectivity | Mock API tests (both modes) | ✓ Device (slow connection) |
+| Internet restored | Cubit and app-flow tests | ✓ Device and emulator |
+| App restarted with pending uploads | Repository restart and Cubit launch tests | ✓ Device |
+| Background retry | Background-run tests | ✓ Device (WorkManager `RETRY` → `SUCCESS`, app killed) |
+| Multiple pending batches | Engine and repository tests | ✓ Device |
+| Duplicate-processing protection | Concurrent-claim test (mutation-checked) | ✓ Device (app and worker overlapping) |
+
+</details>
 
 **Techniques:**
 - **Virtual time** (`fake_async`) for retry timers and connection-stability windows.
@@ -575,6 +710,42 @@ cd flutter-capture && dart format --set-exit-if-changed lib test && flutter anal
 | minSdk | 26 (Android) · 24 (Flutter) |
 | JDK | 17 or newer |
 
+## Reviewer guide
+
+### Triggering each scenario
+
+| Scenario | How to trigger it | Expected result |
+|---|---|---|
+| Location permission denied | Deny the prompt after **Set Office Location**; deny again for "don't ask again" | A banner; the second time with **Open settings**. Returning with permission granted restarts tracking |
+| Approximate location only | Choose **Approximate** in the prompt | A banner explaining that precise location is required, with **Open settings** |
+| Location services off | Turn location off in quick settings | **Location off** with **Turn on location**; check-in locked |
+| Outside 50 m | Move away, or use `adb emu geo fix` on an emulator | **Out of range** with the distance; check-in locked |
+| Weak signal | Stay deep indoors, away from windows | **Weak GPS signal** with the current accuracy; check-in locked |
+| Camera permission denied | Deny the camera prompt (twice for "don't ask again") | **Allow camera**, then **Open settings**; the camera opens on return |
+| No internet | Airplane mode on, then **Upload batch** | "Failed once · No internet connection", the offline banner, photos kept. Airplane mode off: the batch uploads by itself within seconds |
+| Low bandwidth | **Mock server → Slow connection**, then upload | Progress climbs at about 16 KB/s, times out after 8 s, photos kept, retried with backoff |
+| Server error | **Mock server → Server error** | "Server error (503)", the next retry time, and **Retry now** |
+| Unstable connection | **Mock server → Unstable connection** | About half of the uploads drop part-way and are retried |
+| Background completion | Make a batch fail, switch the mock back to **Normal**, then close the app | WorkManager uploads it once its backoff passes; reopening shows **Uploaded** |
+| Restart with pending uploads | Airplane mode on, upload, force-stop, airplane mode off, reopen | The batch uploads on launch |
+
+### Inspecting local state
+
+On debug builds (`./gradlew installDebug`, `flutter run`); release builds are not debuggable. Force-stop the app first so the copies are consistent.
+
+```bash
+# Tether Attendance: DataStore files (protobuf)
+adb shell run-as com.tether.attendance ls files/datastore
+adb exec-out run-as com.tether.attendance cat files/datastore/office_location.preferences_pb > office_location.preferences_pb
+protoc --decode_raw < office_location.preferences_pb
+
+# Tether Capture: the upload queue, photo files and the mock server mode
+adb exec-out run-as com.tether.capture cat databases/upload_queue.db > upload_queue.db
+sqlite3 upload_queue.db "SELECT id, status, retry_count, last_error FROM upload_batches;"
+adb shell run-as com.tether.capture ls -R app_flutter/photos
+adb shell run-as com.tether.capture cat app_flutter/mock_server_mode.txt
+```
+
 ## Screenshots
 
 **Sources:**
@@ -622,6 +793,25 @@ The [v1.0.0 release page](https://github.com/sohailmahmud/tether/releases/tag/v1
 - **Install:** open the APK on the device and allow installs from that source when Android asks.
 
 **Packaging decision.** The two tasks are delivered as two apps, so there are two APKs. Combining them would mean embedding Flutter in the native app: integration the brief doesn't ask for, and risk that adds nothing to either task.
+
+## Delivery process
+
+The work followed the master plan's ten phases. Each phase was built on its own branch, verified (formatting, analysis, tests and device checks), reported against the traceability matrix, and merged through a pull request with a [Conventional Commits](https://www.conventionalcommits.org/) message.
+
+| Phase | Scope | Pull request |
+|---|---|---|
+| 1 | Project foundation: both apps, toolchain, quality gates | Initial commit |
+| 2 | Android: office location, permissions, persistence | [#1](https://github.com/sohailmahmud/tether/pull/1) |
+| 3 | Android: 50 m validation, live distance, failure states | [#2](https://github.com/sohailmahmud/tether/pull/2) |
+| 4 | Flutter: custom camera, zoom, focus, lifecycle | [#3](https://github.com/sohailmahmud/tether/pull/3) |
+| 5 | Flutter: batch capture and the persistent queue | [#4](https://github.com/sohailmahmud/tether/pull/4) |
+| 6 | Flutter: resilient upload engine and mock API | [#5](https://github.com/sohailmahmud/tether/pull/5) |
+| 7 | Flutter: background sync and automatic retry | [#6](https://github.com/sohailmahmud/tether/pull/6) |
+| 8 | Hardening review across both apps | [#7](https://github.com/sohailmahmud/tether/pull/7) |
+| 9 | Documentation and screenshots | [#8](https://github.com/sohailmahmud/tether/pull/8) |
+| 10 | Release build, CI, expanded tests, upload progress, app icon, ADRs | [#9](https://github.com/sohailmahmud/tether/pull/9) |
+
+Release notes are in the [changelog](CHANGELOG.md).
 
 ## Known limitations
 
